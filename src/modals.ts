@@ -1,4 +1,4 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, Modal, requireApiVersion, Setting } from "obsidian";
 
 export interface Choice<T> {
 	label: string;
@@ -22,7 +22,11 @@ export function choose<T>(app: App, title: string, message: string, choices: Cho
 					modal.close();
 				});
 				if (choice.cta) button.setCta();
-				if (choice.warning) button.setWarning();
+				if (choice.warning) {
+					// setDestructive replaced setWarning in Obsidian 1.13; older versions only have setWarning.
+					if (requireApiVersion("1.13.0")) button.setDestructive();
+					else button.setWarning();
+				}
 			});
 		}
 		modal.onClose = () => resolve(result);

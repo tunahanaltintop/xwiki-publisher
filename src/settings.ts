@@ -1,4 +1,4 @@
-import { App, normalizePath, Notice, PluginSettingTab, SecretComponent, Setting } from "obsidian";
+import { App, ButtonComponent, normalizePath, Notice, PluginSettingTab, requireApiVersion, SecretComponent, Setting, SettingDefinitionItem } from "obsidian";
 import type XWikiPublisherPlugin from "./main";
 import type { FolderNoteLocation } from "./location";
 import type { AuthScheme } from "./xwiki-client";
@@ -55,282 +55,361 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	folderNoteName: "{{folder_name}}",
 };
 
+/** One row of the settings tab: shared by the declarative definitions (Obsidian 1.13+) and `display()`. */
+interface SettingRow {
+	name: string;
+	desc?: string | DocumentFragment;
+	/** Shown only while this returns true. */
+	visible?: () => boolean;
+	/** Adds the row's controls; the return value is ignored. */
+	build: (setting: Setting) => unknown;
+}
+
+interface SettingSection {
+	heading?: string;
+	rows: SettingRow[];
+}
+
 export class XWikiPublisherSettingTab extends PluginSettingTab {
 	constructor(app: App, private readonly plugin: XWikiPublisherPlugin) {
 		super(app, plugin);
 	}
 
+	/** Obsidian 1.13+: declarative settings, which also makes them findable in the settings search. */
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return this.sections().map((section) => ({
+			type: "group",
+			heading: section.heading,
+			items: section.rows.map((row) => ({ name: row.name, desc: row.desc, visible: row.visible, render: (setting: Setting) => {
+				row.build(setting);
+			} })),
+		}));
+	}
+
+	/** Obsidian before 1.13: the same rows, rendered imperatively. */
 	display(): void {
 		const { containerEl } = this;
-		const settings = this.plugin.settings;
 		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName("XWiki URL")
-			.setDesc("Base URL of your XWiki instance. Use HTTPS: the token is sent with every request.")
-			.addText((text) =>
-				text
-					.setPlaceholder("https://wiki.example.com/xwiki")
-					.setValue(settings.baseUrl)
-					.onChange(async (value) => {
-						settings.baseUrl = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Wiki")
-			.setDesc("Wiki identifier. Keep the default for the main wiki.")
-			.addText((text) =>
-				text.setValue(settings.wiki).onChange(async (value) => {
-					settings.wiki = value.trim() || DEFAULT_SETTINGS.wiki;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Token")
-			.setDesc("XWiki access token. It is kept in Obsidian's secret storage, not in the plugin data file.")
-			.addComponent((el) =>
-				new SecretComponent(this.app, el).setValue(settings.tokenSecretId).onChange(async (value) => {
-					settings.tokenSecretId = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Authentication method")
-			.setDesc("How the token is sent to XWiki.")
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("bearer", "Bearer token")
-					.addOption("basic", "Basic (username + token)")
-					.addOption("header", "Custom header")
-					.setValue(settings.authScheme)
-					.onChange(async (value) => {
-						settings.authScheme = value as AuthScheme;
-						await this.plugin.saveSettings();
-						this.display();
-					}),
-			);
-
-		if (settings.authScheme === "basic") {
-			new Setting(containerEl).setName("Username").addText((text) =>
-				text.setValue(settings.username).onChange(async (value) => {
-					settings.username = value.trim();
-					await this.plugin.saveSettings();
-				}),
-			);
+		for (const section of this.sections()) {
+			if (section.heading) new Setting(containerEl).setName(section.heading).setHeading();
+			for (const row of section.rows) {
+				if (row.visible && !row.visible()) continue;
+				const setting = new Setting(containerEl).setName(row.name);
+				if (row.desc) setting.setDesc(row.desc);
+				row.build(setting);
+			}
 		}
+	}
 
-		if (settings.authScheme === "header") {
-			new Setting(containerEl)
-				.setName("Header name")
-				.setDesc("The raw token is sent as the value of this header.")
-				.addText((text) =>
-					text.setValue(settings.headerName).onChange(async (value) => {
-						settings.headerName = value.trim();
-						await this.plugin.saveSettings();
-					}),
-				);
-		}
+	/** Re-renders after a change that shows or hides rows. */
+	private refresh(): void {
+		if (requireApiVersion("1.13.0")) this.update();
+		else this.display();
+	}
 
-		new Setting(containerEl)
-			.setName("Test connection")
-			.addButton((button) =>
-				button.setButtonText("Test").onClick(async () => {
-					button.setDisabled(true);
-					try {
-						const client = this.plugin.createClient();
-						const { user } = await client.testConnection();
-						let message = user
-							? `Connected to XWiki as ${user}.`
-							: "XWiki is reachable, but it did not report the user, so the token could not be verified.";
-						if (/^http:\/\//i.test(this.plugin.settings.baseUrl)) {
-							message += " Warning: the URL uses plain HTTP, so the token is sent unencrypted. Use HTTPS.";
-						}
-						try {
-							const markdown = (await client.getSyntaxes()).filter((s) => s.startsWith("markdown"));
-							message += markdown.length > 0
-								? ` Markdown syntaxes on the server: ${markdown.join(", ")}.`
-								: " No Markdown syntax parser found on the server.";
-						} catch {
-							// Syntax listing is informative only.
-						}
-						new Notice(message, 8000);
-					} catch (error) {
-						new Notice(`XWiki connection failed: ${error instanceof Error ? error.message : String(error)}`);
-					} finally {
-						button.setDisabled(false);
-					}
-				}),
-			);
+	private save(): Promise<void> {
+		return this.plugin.saveSettings();
+	}
 
-		new Setting(containerEl).setName("Publishing").setHeading();
+	private sections(): SettingSection[] {
+		const settings = this.plugin.settings;
 
-		new Setting(containerEl)
-			.setName("Default space")
-			.setDesc("Space used when a note does not set its own. Separate nested spaces with dots. Leave empty to publish at the wiki root.")
-			.addText((text) =>
-				text.setValue(settings.defaultSpace).onChange(async (value) => {
-					settings.defaultSpace = value.trim();
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Mirror folder structure")
-			.setDesc("Publish notes below the default space following their vault folders. Notes in a folder pulled from XWiki go below that folder's page.")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.mirrorFolders).onChange(async (value) => {
-					settings.mirrorFolders = value;
-					await this.plugin.saveSettings();
-					this.display();
-				}),
-			);
-
-		if (settings.mirrorFolders) {
-			new Setting(containerEl)
-				.setName("Create folder pages")
-				.setDesc("Create an empty XWiki page for each folder that has no page yet, so the page tree shows the folder hierarchy.")
-				.addToggle((toggle) =>
-					toggle.setValue(settings.createFolderPages).onChange(async (value) => {
-						settings.createFolderPages = value;
-						await this.plugin.saveSettings();
-					}),
-				);
-		}
-
-		new Setting(containerEl)
-			.setName("Use nested pages")
-			.setDesc("Publish each note as a nested page (Space.Note.WebHome) instead of a terminal page (Space.Note).")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.nestedPages).onChange(async (value) => {
-					settings.nestedPages = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Markdown syntax")
-			.setDesc("Syntax identifier provided by the XWiki Markdown extension.")
-			.addText((text) =>
-				text.setValue(settings.syntax).onChange(async (value) => {
-					settings.syntax = value.trim() || DEFAULT_SETTINGS.syntax;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Upload attachments")
-			.setDesc("Upload embedded images and linked files as attachments of the page.")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.uploadAttachments).onChange(async (value) => {
-					settings.uploadAttachments = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl)
-			.setName("Save page URL in note")
-			.setDesc("Write the published page URL to the properties of the note.")
-			.addToggle((toggle) =>
-				toggle.setValue(settings.writeUrlToFrontmatter).onChange(async (value) => {
-					settings.writeUrlToFrontmatter = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl).setName("Sync").setHeading();
-
-		new Setting(containerEl)
-			.setName("Sync folder")
-			.setDesc(
-				"Folder where the XWiki page tree is recreated. Leave empty to recreate it at the vault root. Pages that came from a note update that note.",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Vault root")
-					.setValue(settings.syncFolder)
-					.onChange(async (value) => {
-						settings.syncFolder = value.trim() ? normalizePath(value.trim()) : "";
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Attachment folder")
-			.setDesc(
-				"Subfolder, next to each pulled note, where the attachments of its page are saved. Leave empty to use the attachment location set in Obsidian.",
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Obsidian setting")
-					.setValue(settings.attachmentFolder)
-					.onChange(async (value) => {
-						settings.attachmentFolder = value.trim().replace(/[\\/]+/g, "-");
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Keep XWiki macros")
-			.setDesc(
-				"When pulling pages written in XWiki syntax, convert their source and keep macros such as {{toc/}} as they are, so they keep working after publishing. When off, pages are converted as XWiki shows them and macros appear as their output, for example links.",
-			)
-			.addToggle((toggle) =>
-				toggle.setValue(settings.preserveMacros).onChange(async (value) => {
-					settings.preserveMacros = value;
-					await this.plugin.saveSettings();
-				}),
-			);
-
-		new Setting(containerEl).setName("Folder notes").setHeading();
-
-		const intro = containerEl.createDiv({ cls: "setting-item-description xwiki-publisher-section-intro" });
-		intro.appendText("Pages with children are written as folder notes, the note that opens when you select a folder. Match these settings with the ");
-		intro.createEl("a", { text: "Folder notes", href: "https://github.com/LostPaul/obsidian-folder-notes" });
-		intro.appendText(" plugin.");
-
-		new Setting(containerEl)
-			.setName("Folder note location")
-			.setDesc("Where the folder note of a folder is stored.")
-			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("inside", "Inside the folder")
-					.addOption("parent", "Next to the folder")
-					.setValue(settings.folderNoteLocation)
-					.onChange(async (value) => {
-						settings.folderNoteLocation = value as FolderNoteLocation;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		new Setting(containerEl)
-			.setName("Folder note name")
-			.setDesc("File name of folder notes; {{folder_name}} stands for the folder's name.")
-			.addText((text) =>
-				text
-					.setPlaceholder("{{folder_name}}")
-					.setValue(settings.folderNoteName)
-					.onChange(async (value) => {
-						settings.folderNoteName = value.trim() || DEFAULT_SETTINGS.folderNoteName;
-						await this.plugin.saveSettings();
-					}),
-			);
-
-		const match = new Setting(containerEl)
-			.setName("Use Folder notes settings")
-			.setDesc("Copies the storage location and name of the Folder notes plugin.")
-			.addButton((button) =>
-				button.setButtonText("Copy").onClick(async () => {
-					const result = await this.plugin.adoptFolderNotesSettings();
-					new Notice(result);
-					this.display();
-				}),
-			);
-		void this.plugin.folderNotesMismatch().then((mismatch) => {
-			if (mismatch) match.descEl.createDiv({ cls: "xwiki-publisher-warning", text: mismatch });
+		const folderNotesIntro = createFragment((fragment) => {
+			fragment.appendText("Where the folder note of a folder is stored. Pages with children are written as folder notes; match this with the ");
+			fragment.createEl("a", { text: "Folder notes", href: "https://github.com/LostPaul/obsidian-folder-notes" });
+			fragment.appendText(" plugin.");
 		});
+
+		return [
+			{
+				rows: [
+					{
+						name: "XWiki URL",
+						desc: "Base URL of your XWiki instance. Use HTTPS: the token is sent with every request.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setPlaceholder("https://wiki.example.com/xwiki")
+									.setValue(settings.baseUrl)
+									.onChange((value) => {
+										settings.baseUrl = value.trim();
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Wiki",
+						desc: "Wiki identifier. Keep the default for the main wiki.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text.setValue(settings.wiki).onChange((value) => {
+									settings.wiki = value.trim() || DEFAULT_SETTINGS.wiki;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Token",
+						desc: "XWiki access token. It is kept in Obsidian's secret storage, not in the plugin data file.",
+						build: (setting) =>
+							setting.addComponent((el) =>
+								new SecretComponent(this.app, el).setValue(settings.tokenSecretId).onChange((value) => {
+									settings.tokenSecretId = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Authentication method",
+						desc: "How the token is sent to XWiki.",
+						build: (setting) =>
+							setting.addDropdown((dropdown) =>
+								dropdown
+									.addOption("bearer", "Bearer token")
+									.addOption("basic", "Basic (username + token)")
+									.addOption("header", "Custom header")
+									.setValue(settings.authScheme)
+									.onChange((value) => {
+										settings.authScheme = value as AuthScheme;
+										void this.save();
+										this.refresh();
+									}),
+							),
+					},
+					{
+						name: "Username",
+						visible: () => settings.authScheme === "basic",
+						build: (setting) =>
+							setting.addText((text) =>
+								text.setValue(settings.username).onChange((value) => {
+									settings.username = value.trim();
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Header name",
+						desc: "The raw token is sent as the value of this header.",
+						visible: () => settings.authScheme === "header",
+						build: (setting) =>
+							setting.addText((text) =>
+								text.setValue(settings.headerName).onChange((value) => {
+									settings.headerName = value.trim();
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Test connection",
+						desc: "Checks the token and lists the Markdown syntaxes of the server.",
+						build: (setting) => setting.addButton((button) => button.setButtonText("Test").onClick(() => void this.testConnection(button))),
+					},
+				],
+			},
+			{
+				heading: "Publishing",
+				rows: [
+					{
+						name: "Default space",
+						desc: "Space used when a note does not set its own. Separate nested spaces with dots. Leave empty to publish at the wiki root.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text.setValue(settings.defaultSpace).onChange((value) => {
+									settings.defaultSpace = value.trim();
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Mirror folder structure",
+						desc: "Publish notes below the default space following their vault folders. Notes in a folder pulled from XWiki go below that folder's page.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.mirrorFolders).onChange((value) => {
+									settings.mirrorFolders = value;
+									void this.save();
+									this.refresh();
+								}),
+							),
+					},
+					{
+						name: "Create folder pages",
+						desc: "Create an empty XWiki page for each folder that has no page yet, so the page tree shows the folder hierarchy.",
+						visible: () => settings.mirrorFolders,
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.createFolderPages).onChange((value) => {
+									settings.createFolderPages = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Use nested pages",
+						desc: "Publish each note as a nested page (Space.Note.WebHome) instead of a terminal page (Space.Note).",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.nestedPages).onChange((value) => {
+									settings.nestedPages = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Markdown syntax",
+						desc: "Syntax identifier provided by the XWiki Markdown extension.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text.setValue(settings.syntax).onChange((value) => {
+									settings.syntax = value.trim() || DEFAULT_SETTINGS.syntax;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Upload attachments",
+						desc: "Upload embedded images and linked files as attachments of the page.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.uploadAttachments).onChange((value) => {
+									settings.uploadAttachments = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Save page URL in note",
+						desc: "Write the published page URL to the properties of the note.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.writeUrlToFrontmatter).onChange((value) => {
+									settings.writeUrlToFrontmatter = value;
+									void this.save();
+								}),
+							),
+					},
+				],
+			},
+			{
+				heading: "Sync",
+				rows: [
+					{
+						name: "Sync folder",
+						desc: "Folder where the XWiki page tree is recreated. Leave empty to recreate it at the vault root. Pages that came from a note update that note.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setPlaceholder("Vault root")
+									.setValue(settings.syncFolder)
+									.onChange((value) => {
+										settings.syncFolder = value.trim() ? normalizePath(value.trim()) : "";
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Attachment folder",
+						desc: "Subfolder, next to each pulled note, where the attachments of its page are saved. Leave empty to use the attachment location set in Obsidian.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setPlaceholder("Obsidian setting")
+									.setValue(settings.attachmentFolder)
+									.onChange((value) => {
+										settings.attachmentFolder = value.trim().replace(/[\\/]+/g, "-");
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Keep XWiki macros",
+						desc: "When pulling pages written in XWiki syntax, convert their source and keep macros such as {{toc/}} as they are, so they keep working after publishing. When off, pages are converted as XWiki shows them and macros appear as their output, for example links.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.preserveMacros).onChange((value) => {
+									settings.preserveMacros = value;
+									void this.save();
+								}),
+							),
+					},
+				],
+			},
+			{
+				heading: "Folder notes",
+				rows: [
+					{
+						name: "Folder note location",
+						desc: folderNotesIntro,
+						build: (setting) =>
+							setting.addDropdown((dropdown) =>
+								dropdown
+									.addOption("inside", "Inside the folder")
+									.addOption("parent", "Next to the folder")
+									.setValue(settings.folderNoteLocation)
+									.onChange((value) => {
+										settings.folderNoteLocation = value as FolderNoteLocation;
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Folder note name",
+						desc: "File name of folder notes; {{folder_name}} stands for the folder's name.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setPlaceholder("{{folder_name}}")
+									.setValue(settings.folderNoteName)
+									.onChange((value) => {
+										settings.folderNoteName = value.trim() || DEFAULT_SETTINGS.folderNoteName;
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Use Folder notes settings",
+						desc: "Copies the storage location and name of the Folder notes plugin.",
+						build: (setting) => {
+							setting.addButton((button) =>
+								button.setButtonText("Copy").onClick(() => {
+									void this.plugin.adoptFolderNotesSettings().then((result) => {
+										new Notice(result);
+										this.refresh();
+									});
+								}),
+							);
+							void this.plugin.folderNotesMismatch().then((mismatch) => {
+								if (mismatch) setting.descEl.createDiv({ cls: "xwiki-publisher-warning", text: mismatch });
+							});
+						},
+					},
+				],
+			},
+		];
+	}
+
+	private async testConnection(button: ButtonComponent): Promise<void> {
+		button.setDisabled(true);
+		try {
+			const client = this.plugin.createClient();
+			const { user } = await client.testConnection();
+			let message = user
+				? `Connected to XWiki as ${user}.`
+				: "XWiki is reachable, but it did not report the user, so the token could not be verified.";
+			if (/^http:\/\//i.test(this.plugin.settings.baseUrl)) {
+				message += " Warning: the URL uses plain HTTP, so the token is sent unencrypted. Use HTTPS.";
+			}
+			try {
+				const markdown = (await client.getSyntaxes()).filter((s) => s.startsWith("markdown"));
+				message += markdown.length > 0 ? ` Markdown syntaxes on the server: ${markdown.join(", ")}.` : " No Markdown syntax parser found on the server.";
+			} catch {
+				// Syntax listing is informative only.
+			}
+			new Notice(message, 8000);
+		} catch (error) {
+			new Notice(`XWiki connection failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			button.setDisabled(false);
+		}
 	}
 }

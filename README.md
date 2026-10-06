@@ -229,7 +229,8 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
   downloads the pages you pull with their attachments.
 - **Account**: an XWiki account and an access token for it are required.
 - **No telemetry**: the plugin collects no usage data and contacts no other service.
-- **Files**: the plugin only reads and writes files inside your vault.
+- **Files**: the plugin only reads and writes files inside your vault. It never lists the vault's files: it only
+  opens notes it published or pulled, the notes you act on, and the files they link to.
 - **Token**: stored in Obsidian's secret storage and sent only to the configured XWiki URL. Use HTTPS; with plain
   HTTP the token travels unencrypted, and the plugin warns about it.
 

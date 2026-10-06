@@ -168,11 +168,15 @@ export class SyncService {
 		return typeof reference === "string" ? parseReference(reference) : null;
 	}
 
-	/** Maps every note's XWiki location to the note, so pulled pages land on the note they came from. */
+	/**
+	 * Maps the XWiki location of each note that was published or pulled to the note, so pulled pages land on the note
+	 * they came from. Only notes known from the sync records are read, never a listing of the whole vault.
+	 */
 	buildIndex(): Map<string, TFile> {
 		const index = new Map<string, TFile>();
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			index.set(serializeReference(this.locate(file)), file);
+		for (const path of Object.keys(this.host.syncState)) {
+			const file = this.app.vault.getFileByPath(path);
+			if (file && file.extension === "md") index.set(serializeReference(this.locate(file)), file);
 		}
 		return index;
 	}
@@ -702,7 +706,15 @@ export class SyncService {
 		if (!remote) return { outcome: "missing", converted: false };
 
 		const vault = this.app.vault;
-		const existing = options.file ?? options.index.get(serializeReference(location));
+		const reference = serializeReference(location);
+		let existing = options.file ?? options.index.get(reference);
+		let expected: string | undefined;
+		if (!existing) {
+			// A note that was never synced but sits where the page belongs, and maps to it, is that page's note.
+			expected = await this.expectedPath(client, location, remote, options);
+			const candidate = vault.getFileByPath(expected);
+			if (candidate && serializeReference(this.locate(candidate)) === reference) existing = candidate;
+		}
 		// Cheap check first: converting a page costs an extra request.
 		// Records from earlier versions do not know where the plugin placed the note: if it is where the page belongs,
 		// it counts as placed; anywhere else the user put it there, and it stays.
@@ -720,7 +732,7 @@ export class SyncService {
 		const { source, converted } = await this.remoteMarkdown(client, location, remote);
 		const result = (outcome: PullOutcome): PullResult => ({ outcome, converted });
 
-		const path = existing?.path ?? this.availablePath(await this.expectedPath(client, location, remote, options));
+		const path = existing?.path ?? this.availablePath(expected ?? (await this.expectedPath(client, location, remote, options)));
 		// Attachments already in the vault are linked right away; new ones once they are downloaded.
 		const links = new Map<string, string>();
 		for (const [name, file] of this.trackedAttachments(location)) links.set(name, this.app.metadataCache.fileToLinktext(file, path, true));

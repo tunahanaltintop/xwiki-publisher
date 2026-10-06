@@ -211,7 +211,8 @@ export class XWikiPanelView extends ItemView {
 
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
 		const field = (name: string, key: string, placeholder: string, desc: string) => {
-			const current = typeof fm?.[key] === "string" ? (fm[key] as string) : "";
+			const value: unknown = fm?.[key];
+			const current = typeof value === "string" ? value : "";
 			new Setting(el)
 				.setName(name)
 				.setDesc(desc)

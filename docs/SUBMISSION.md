@@ -129,13 +129,13 @@ Dizin, kaynak kodu Obsidian'ın ESLint kurallarıyla tarar. Aynı kurallar proje
 npm run lint
 ```
 
-Beklenen sonuç: **0 hata, 5 uyarı.** Uyarılar bilinçli olarak bırakıldı:
+Beklenen sonuç: **0 hata, 2 uyarı.** İkisi de yalnızca Obsidian 1.13'ten eski sürümler için tutulan yedek
+yollarda:
 
 | Uyarı | Neden kaldı |
 | --- | --- |
-| `setWarning` deprecated | Yerine geçen `setDestructive` Obsidian 1.13'te geldi; eklenti 1.11.4'ü destekliyor. |
-| `display()` deprecated (3 adet) | Yeni `getSettingDefinitions` API'si 1.13'te geldi; 1.13'ten eski sürümlerde `display()` zorunlu. |
-| `prefer-setting-definitions` | Aynı neden. `minAppVersion` ileride 1.13'e yükseltilirse ayar sekmesi yeni API'ye taşınabilir. |
+| `setWarning` deprecated | Obsidian 1.13 ve üstünde `setDestructive` kullanılıyor; `setWarning` yalnızca eski sürümlerde çağrılıyor. |
+| `display()` deprecated | Obsidian 1.13 ve üstünde ayarlar `getSettingDefinitions` ile tanımlanıyor (ayar aramasında görünür); `display()` yalnızca eski sürümlerde kullanılıyor. |
 
 Uyarılar gönderimi engellemez. Dizin bunları "Warning" olarak gösterir.
 
@@ -260,6 +260,15 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Build verification başarısız | Release'i elle değil iş akışıyla oluşturun; `package-lock.json` commit'lenmiş olmalı ve `npm ci` kullanılmalı. |
 | Etiket ile sürüm uyuşmuyor | Etiket `1.0.0` olmalı, `v1.0.0` değil. |
 | "Invalid identifier" | `id` yayınlandıktan sonra değiştirilemez; Obsidian Discord'undaki `#community-directory` kanalına yazın. |
+
+### İlk gönderimin inceleme sonucu (1.0.0)
+
+| Bölüm | Sonuç | Yapılan |
+| --- | --- | --- |
+| Behavior | Recommendation: *Vault Enumeration* | 1.0.1'de giderildi: plugin vault'u listelemiyor, yalnızca senkronize ettiği notları açıyor. |
+| Source code | Warning: `getSettingDefinitions` yok | 1.0.1'de giderildi: bildirimsel ayar API'si eklendi. |
+| Source code | Warning: gereksiz tip dönüşümü (`view.ts`) | 1.0.1'de giderildi. |
+| Source code | Recommendation: `setWarning`, `display` deprecated | Obsidian 1.13+ için yeni API'ler kullanılıyor; eski çağrılar yalnızca eski sürümler için kaldı. |
 
 ## 9. Yayından sonra
 

@@ -10,7 +10,7 @@ Bulunan sorunlar düzeltildi; bu belge yapılanları ve bilinen sınırlamaları
 | --- | --- |
 | TypeScript (`tsc --noEmit`, strict) | Hatasız |
 | Birim testleri (`npm test`) | 47/47 geçti |
-| Resmi ESLint kuralları (`npm run lint`) | 0 hata, 5 bilinçli uyarı (bkz. SUBMISSION.md §3) |
+| Resmi ESLint kuralları (`npm run lint`) | 0 hata, 2 bilinçli uyarı (bkz. SUBMISSION.md §3) |
 | Production build (`npm run build`) | Başarılı |
 
 ## Düzeltilen sorunlar
@@ -159,6 +159,18 @@ Düzeltmeler bağımsız olarak yeniden doğrulandı. Bu turda bulunan ve düzel
 - İçeriği değişmeden yalnızca başlığı değişen sayfalarda eski `xwiki-title` kalıyordu; düzeltildi.
 - Bilinen sınırlama: çakışma kopyası (`… (XWiki conflict).md`) yeni eklerin indirilmesini beklemez; bu kopyadaki yeni
   ek linkleri dosya adıyla yazılır.
+
+## Dizin incelemesi sonrası (1.0.1)
+
+Obsidian Community dizininin otomatik incelemesindeki tavsiye ve uyarılar giderildi:
+
+- **Vault enumeration:** Pull ve sync, notları XWiki sayfalarıyla eşleştirmek için vault'taki tüm notları
+  listeliyordu. Artık yalnızca senkronizasyon kaydında bulunan (publish veya pull edilmiş) notlar açılıyor. Hiç
+  senkronize edilmemiş ama sayfanın yerinde duran ve o sayfaya eşlenen bir not da tanınıyor.
+- **Ayar arama:** Ayar sekmesi tek bir satır listesinden hem `getSettingDefinitions` (Obsidian 1.13+, ayar
+  aramasında görünür) hem de `display()` (eski sürümler) ile çiziliyor.
+- **Düğmeler:** Obsidian 1.13+ için `setDestructive`, eski sürümler için `setWarning`.
+- Gereksiz bir tip dönüşümü ve kullanılmayan bir CSS sınıfı kaldırıldı.
 
 ## Bilinçli tasarım kararları
 

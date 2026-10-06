@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+- Settings appear in Obsidian's settings search (Obsidian 1.13 and later), using the declarative settings API; earlier Obsidian versions keep the classic settings tab.
+- The plugin no longer lists all files of the vault: notes are matched to XWiki pages through the notes it published or pulled.
+- Destructive confirmation buttons use the current Obsidian button style on Obsidian 1.13 and later.
+
 ## 1.0.0
 
 First public release.
