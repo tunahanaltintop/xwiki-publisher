@@ -77,7 +77,7 @@ sizin yapmanız gereken bir adım var demektir.
 | `name`: kısa, Basic Latin, "Obsidian" ve "Plugin" içermez | ✅ `XWiki Publisher` |
 | `description`: eylemle başlar, en fazla 250 karakter, nokta ile biter, emoji yok, doğru büyük harf kullanımı (XWiki, Markdown) | ✅ 106 karakter |
 | `version`: `x.y.z` | ✅ İlk release için `1.0.0` yapılacak (bkz. adım 4). |
-| `minAppVersion`: gerçekten gereken en düşük sürüm | ✅ `1.11.4`: token için kullanılan `SecretStorage` ve `SecretComponent` API'leri bu sürümde geldi. |
+| `minAppVersion`: gerçekten gereken en düşük sürüm | ✅ `1.13.0`: ayar sekmesi `getSettingDefinitions`/`update()` ve onay düğmeleri `setDestructive` kullanıyor; bunlar 1.13.0'da geldi. Token için kullanılan `SecretStorage` 1.11.4'te gelmişti. 1.1.0 sürümünden önce en düşük sürüm 1.11.4 idi. |
 | `isDesktopOnly`: Node.js veya Electron API'si kullanılıyorsa `true` | ✅ `false`: Node.js ve Electron kullanılmıyor; ağ istekleri Obsidian'ın `requestUrl` fonksiyonuyla yapılıyor. |
 
 ### Developer policies
@@ -129,15 +129,9 @@ Dizin, kaynak kodu Obsidian'ın ESLint kurallarıyla tarar. Aynı kurallar proje
 npm run lint
 ```
 
-Beklenen sonuç: **0 hata, 2 uyarı.** İkisi de yalnızca Obsidian 1.13'ten eski sürümler için tutulan yedek
-yollarda:
+Beklenen sonuç: **0 hata, 0 uyarı.** 1.1.0 sürümünden itibaren en düşük Obsidian sürümü 1.13.0 olduğu için yalnızca
+güncel API'ler kullanılıyor; dizin taramasında da tavsiye kalmaması beklenir.
 
-| Uyarı | Neden kaldı |
-| --- | --- |
-| `setWarning` deprecated | Obsidian 1.13 ve üstünde `setDestructive` kullanılıyor; `setWarning` yalnızca eski sürümlerde çağrılıyor. |
-| `display()` deprecated | Obsidian 1.13 ve üstünde ayarlar `getSettingDefinitions` ile tanımlanıyor (ayar aramasında görünür); `display()` yalnızca eski sürümlerde kullanılıyor. |
-
-Uyarılar gönderimi engellemez. Dizin bunları "Warning" olarak gösterir.
 
 ## 4. Sürümü hazırlama
 
@@ -160,7 +154,7 @@ npm version 1.0.0
 
 1. `package.json` sürümünü `1.0.0` yapar.
 2. `version-bump.mjs` betiğini çalıştırır: `manifest.json` sürümünü günceller ve `versions.json` dosyasına
-   `"1.0.0": "1.11.4"` satırını ekler.
+   ilgili satırı ekler (ör. `"1.1.0": "1.13.0"`).
 3. Değişiklikleri commit'ler ve `1.0.0` etiketini oluşturur.
 
 Sonraki sürümlerde `npm version patch`, `npm version minor` veya `npm version major` kullanın. `minAppVersion`
@@ -268,7 +262,7 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Behavior | Recommendation: *Vault Enumeration* | 1.0.1'de giderildi: plugin vault'u listelemiyor, yalnızca senkronize ettiği notları açıyor. |
 | Source code | Warning: `getSettingDefinitions` yok | 1.0.1'de giderildi: bildirimsel ayar API'si eklendi. |
 | Source code | Warning: gereksiz tip dönüşümü (`view.ts`) | 1.0.1'de giderildi. |
-| Source code | Recommendation: `setWarning`, `display` deprecated | Obsidian 1.13+ için yeni API'ler kullanılıyor; eski çağrılar yalnızca eski sürümler için kaldı. |
+| Source code | Recommendation: `setWarning`, `display` deprecated | 1.1.0'da giderildi: en düşük sürüm 1.13.0 yapıldı, eski API çağrıları kaldırıldı. |
 
 ## 9. Yayından sonra
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- Requires Obsidian 1.13.0 or later. The settings tab and confirmation buttons use only the current Obsidian APIs; the classic settings tab for older Obsidian versions was removed.
+
 ## 1.0.1
 
 - Settings appear in Obsidian's settings search (Obsidian 1.13 and later), using the declarative settings API; earlier Obsidian versions keep the classic settings tab.

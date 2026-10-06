@@ -10,7 +10,7 @@ Bulunan sorunlar düzeltildi; bu belge yapılanları ve bilinen sınırlamaları
 | --- | --- |
 | TypeScript (`tsc --noEmit`, strict) | Hatasız |
 | Birim testleri (`npm test`) | 47/47 geçti |
-| Resmi ESLint kuralları (`npm run lint`) | 0 hata, 2 bilinçli uyarı (bkz. SUBMISSION.md §3) |
+| Resmi ESLint kuralları (`npm run lint`) | 0 hata, 0 uyarı |
 | Production build (`npm run build`) | Başarılı |
 
 ## Düzeltilen sorunlar
@@ -170,6 +170,8 @@ Obsidian Community dizininin otomatik incelemesindeki tavsiye ve uyarılar gider
 - **Ayar arama:** Ayar sekmesi tek bir satır listesinden hem `getSettingDefinitions` (Obsidian 1.13+, ayar
   aramasında görünür) hem de `display()` (eski sürümler) ile çiziliyor.
 - **Düğmeler:** Obsidian 1.13+ için `setDestructive`, eski sürümler için `setWarning`.
+- **1.1.0:** En düşük Obsidian sürümü 1.13.0'a yükseltildi; `display()` ve `setWarning` yedek yolları kaldırıldı.
+  Ayar sekmesi yalnızca bildirimsel API ile çiziliyor ve satır görünürlüğü `update()` ile yenileniyor.
 - Gereksiz bir tip dönüşümü ve kullanılmayan bir CSS sınıfı kaldırıldı.
 
 ## Bilinçli tasarım kararları
@@ -206,7 +208,7 @@ Obsidian Community dizininin otomatik incelemesindeki tavsiye ve uyarılar gider
 
 ## Sonraki adımlar için öneriler
 
-- `minAppVersion` 1.13'e yükseltildiğinde ayar sekmesi `getSettingDefinitions` API'sine taşınmalı. Böylece ayarlar
-  Obsidian'ın ayar aramasında görünür ve kalan lint uyarıları kapanır.
+- Yapıldı (1.1.0): `minAppVersion` 1.13.0'a yükseltildi ve ayar sekmesi `getSettingDefinitions` API'sine taşındı;
+  ayarlar Obsidian'ın ayar aramasında görünüyor, lint uyarıları kapandı.
 - XWiki istemcisi için sahte (mock) `requestUrl` ile entegrasyon testleri eklenebilir.
 - Callout'ların (`> [!note]`) XWiki tarafında bilgi kutusuna dönüştürülmesi değerlendirilebilir.

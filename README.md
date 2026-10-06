@@ -25,7 +25,7 @@ they keep their Markdown source and can travel both ways.
 
 ## Requirements
 
-- Obsidian **1.11.4** or later (desktop and mobile).
+- Obsidian **1.13.0** or later (desktop and mobile).
 - An XWiki instance reachable over **HTTPS** with:
   - the **Markdown Syntax 1.2** extension installed (syntax id `markdown/1.2`);
   - an authenticator that accepts an **access token** (for example a bearer token issued by the OpenID Connect

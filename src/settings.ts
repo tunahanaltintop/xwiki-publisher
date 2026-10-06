@@ -1,4 +1,4 @@
-import { App, ButtonComponent, normalizePath, Notice, PluginSettingTab, requireApiVersion, SecretComponent, Setting, SettingDefinitionItem } from "obsidian";
+import { App, ButtonComponent, normalizePath, Notice, PluginSettingTab, SecretComponent, Setting, SettingDefinitionItem } from "obsidian";
 import type XWikiPublisherPlugin from "./main";
 import type { FolderNoteLocation } from "./location";
 import type { AuthScheme } from "./xwiki-client";
@@ -55,11 +55,11 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	folderNoteName: "{{folder_name}}",
 };
 
-/** One row of the settings tab: shared by the declarative definitions (Obsidian 1.13+) and `display()`. */
+/** One row of the settings tab, rendered through the declarative settings API. */
 interface SettingRow {
 	name: string;
 	desc?: string | DocumentFragment;
-	/** Shown only while this returns true. */
+	/** Shown only while this returns true; re-evaluated by `update()`. */
 	visible?: () => boolean;
 	/** Adds the row's controls; the return value is ignored. */
 	build: (setting: Setting) => unknown;
@@ -75,7 +75,7 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 		super(app, plugin);
 	}
 
-	/** Obsidian 1.13+: declarative settings, which also makes them findable in the settings search. */
+	/** Declarative settings, which also makes them findable in Obsidian's settings search. */
 	getSettingDefinitions(): SettingDefinitionItem[] {
 		return this.sections().map((section) => ({
 			type: "group",
@@ -86,25 +86,9 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 		}));
 	}
 
-	/** Obsidian before 1.13: the same rows, rendered imperatively. */
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-		for (const section of this.sections()) {
-			if (section.heading) new Setting(containerEl).setName(section.heading).setHeading();
-			for (const row of section.rows) {
-				if (row.visible && !row.visible()) continue;
-				const setting = new Setting(containerEl).setName(row.name);
-				if (row.desc) setting.setDesc(row.desc);
-				row.build(setting);
-			}
-		}
-	}
-
 	/** Re-renders after a change that shows or hides rows. */
 	private refresh(): void {
-		if (requireApiVersion("1.13.0")) this.update();
-		else this.display();
+		this.update();
 	}
 
 	private save(): Promise<void> {
