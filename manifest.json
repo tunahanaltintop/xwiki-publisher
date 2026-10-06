@@ -1,0 +1,10 @@
+{
+	"id": "xwiki-publisher",
+	"name": "XWiki Publisher",
+	"version": "0.1.0",
+	"minAppVersion": "1.11.4",
+	"description": "Publish notes to XWiki and sync XWiki pages back into your vault as Markdown, using an XWiki access token.",
+	"author": "Tunahan ALTINTOP",
+	"authorUrl": "https://github.com/tunahanaltintop",
+	"isDesktopOnly": false
+}

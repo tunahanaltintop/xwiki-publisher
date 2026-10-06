@@ -1,0 +1,84 @@
+.xwiki-publisher-wide-input {
+	width: 100%;
+	min-width: 20em;
+}
+
+.xwiki-panel .setting-item {
+	padding: var(--size-4-2) 0;
+}
+
+.xwiki-panel .setting-item-heading {
+	padding-top: var(--size-4-4);
+}
+
+.xwiki-panel-actions .setting-item-control,
+.xwiki-panel-field .setting-item-control {
+	flex-wrap: wrap;
+	justify-content: flex-start;
+	gap: var(--size-4-2);
+}
+
+.xwiki-panel-actions .setting-item-info {
+	display: none;
+}
+
+.xwiki-panel-field .setting-item-info {
+	display: none;
+}
+
+.xwiki-panel-field input[type="text"] {
+	flex: 1 1 10em;
+	min-width: 0;
+}
+
+.xwiki-panel-busy {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-hover);
+	color: var(--text-accent);
+	font-size: var(--font-ui-small);
+}
+
+.xwiki-panel-status,
+.xwiki-panel-hint {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding-bottom: var(--size-4-1);
+}
+
+.xwiki-panel-status.mod-warning {
+	color: var(--text-warning);
+}
+
+.xwiki-panel-activity {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.xwiki-panel-activity li {
+	padding: var(--size-4-1) 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.xwiki-panel-activity li.mod-error {
+	color: var(--text-error);
+}
+
+.xwiki-panel-time {
+	color: var(--text-faint);
+	margin-right: var(--size-4-2);
+}
+
+.xwiki-publisher-warning {
+	color: var(--text-warning);
+}
+
+.xwiki-publisher-section-intro {
+	padding-bottom: var(--size-4-2);
+}
