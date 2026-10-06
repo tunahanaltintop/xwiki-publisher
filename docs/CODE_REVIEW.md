@@ -57,10 +57,12 @@ secret storage'ında tutulur.
 
 ## Folder notes uyumluluğu (inceleme sonrası eklendi)
 
-XWiki'de içeriği olan üst sayfalar, Obsidian'da yalnızca klasör olarak görünüyordu. Kendi klasör-not mekanizmamızı
-yazmak yerine yaygın kullanılan [Folder notes](https://github.com/LostPaul/obsidian-folder-notes) eklentisinin
-düzeni desteklendi. Gerekçe: dosya gezginine müdahale, Obsidian'ın resmi olmayan arayüzlerini gerektirir; bakım ve
-inceleme riski taşır.
+> **1.2.0'da değişti:** Folder notes eklentisine bağımlılık kaldırıldı; klasöre tıklayınca not açma, gizleme ve ad
+> senkronu plugin'e alındı. Aşağıdaki düzen kuralları geçerliliğini koruyor; ayrıntı için *Dahili klasör notları*
+> bölümüne bakın.
+
+XWiki'de içeriği olan üst sayfalar, Obsidian'da yalnızca klasör olarak görünüyordu. İlk sürümlerde bu, yaygın
+kullanılan [Folder notes](https://github.com/LostPaul/obsidian-folder-notes) eklentisinin düzenine uyularak çözüldü.
 
 - Ayarlar: **Folder note location** (içinde veya yanında) ve **Folder note name** (`{{folder_name}}` şablonu).
   Varsayılanlar Folder notes'un varsayılanlarıyla aynı.

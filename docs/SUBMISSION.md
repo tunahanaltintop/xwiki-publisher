@@ -1,7 +1,7 @@
 # Yayınlama ve Obsidian Community dizinine gönderme rehberi
 
-Bu rehber, XWiki Publisher eklentisinin ilk sürümünü yayınlamak ve Obsidian Community dizinine (community.obsidian.md)
-göndermek için gereken bütün adımları içerir. Obsidian'ın resmi dokümanlarına dayanır:
+Bu rehber, XWiki Publisher eklentisinin Obsidian Community dizinine (community.obsidian.md) nasıl gönderildiğini ve
+yeni sürümlerin nasıl yayınlandığını anlatır. Obsidian'ın resmi dokümanlarına dayanır:
 
 - [Submit your plugin](https://docs.obsidian.md/plugins/releasing/submit-plugin)
 - [Submission requirements for plugins](https://docs.obsidian.md/community-directory/submission-requirements-for-plugins)
@@ -14,6 +14,19 @@ göndermek için gereken bütün adımları içerir. Obsidian'ın resmi doküman
   [Community directory FAQ](https://docs.obsidian.md/community-directory/faq)
 
 XWiki tarafında yapılması gerekenler ayrı bir belgededir: [XWIKI_SETUP.md](XWIKI_SETUP.md).
+
+## Güncel durum
+
+| | |
+| --- | --- |
+| Dizin sayfası | https://community.obsidian.md/plugins/xwiki-publisher |
+| Depo | https://github.com/tunahanaltintop/xwiki-publisher (herkese açık, MIT) |
+| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0` (en düşük Obsidian sürümü 1.13.0) |
+| Hazırlanan sürüm | `1.2.0`: dahili klasör notları |
+| Otomatik inceleme | Hata ve uyarı yok; `1.1.0` ile son tavsiyeler de giderildi (bkz. §8). |
+
+İlk gönderim tamamlandı; §0–§7 o sürecin kaydıdır. Yeni bir sürüm için yalnızca **§9 Yeni sürüm yayınlama** adımları
+gerekir.
 
 ---
 
@@ -76,7 +89,7 @@ sizin yapmanız gereken bir adım var demektir.
 | `id`: yalnızca küçük harf ve tire, `plugin` ile bitmez, `obsidian` içermez, benzersiz | ✅ `xwiki-publisher` |
 | `name`: kısa, Basic Latin, "Obsidian" ve "Plugin" içermez | ✅ `XWiki Publisher` |
 | `description`: eylemle başlar, en fazla 250 karakter, nokta ile biter, emoji yok, doğru büyük harf kullanımı (XWiki, Markdown) | ✅ 106 karakter |
-| `version`: `x.y.z` | ✅ İlk release için `1.0.0` yapılacak (bkz. adım 4). |
+| `version`: `x.y.z` | ✅ `npm version` ile artırılıyor (bkz. adım 4 ve §9). |
 | `minAppVersion`: gerçekten gereken en düşük sürüm | ✅ `1.13.0`: ayar sekmesi `getSettingDefinitions`/`update()` ve onay düğmeleri `setDestructive` kullanıyor; bunlar 1.13.0'da geldi. Token için kullanılan `SecretStorage` 1.11.4'te gelmişti. 1.1.0 sürümünden önce en düşük sürüm 1.11.4 idi. |
 | `isDesktopOnly`: Node.js veya Electron API'si kullanılıyorsa `true` | ✅ `false`: Node.js ve Electron kullanılmıyor; ağ istekleri Obsidian'ın `requestUrl` fonksiyonuyla yapılıyor. |
 
@@ -264,13 +277,38 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Source code | Warning: gereksiz tip dönüşümü (`view.ts`) | 1.0.1'de giderildi. |
 | Source code | Recommendation: `setWarning`, `display` deprecated | 1.1.0'da giderildi: en düşük sürüm 1.13.0 yapıldı, eski API çağrıları kaldırıldı. |
 
-## 9. Yayından sonra
+## 9. Yeni sürüm yayınlama
 
-- Güncellemeler için yeniden gönderim gerekmez: `npm version patch` → `git push origin main --follow-tags` → taslak
-  release'i yayınla.
-- Duyuru (isteğe bağlı): Obsidian forumunda [Share & showcase](https://forum.obsidian.md/c/share-showcase/9) ve
-  Discord'da `#updates` kanalı (bunun için `developer` rolü gerekir).
-- Eklenti artık desteklenemeyecekse dizinden **Archive** edin veya sahipliği devredin.
+Eklenti dizinde olduğu için yeni sürümlerde yeniden gönderim gerekmez; yeni bir GitHub release'i yeterlidir.
+
+1. **Değişiklikleri hazırlayın:** `CHANGELOG.md` dosyasına yeni sürümün notlarını ekleyin, README ve `docs/`
+   belgelerini güncelleyin.
+2. **Kontroller:** `npm run lint` (0 hata, 0 uyarı), `npm test` ve `npm run build` temiz geçmeli. §10'daki manuel
+   testlerden değişikliği ilgilendirenleri Test vault'unda çalıştırın.
+3. **Sürüm:** Hata düzeltmesi için `npm version patch`, yeni özellik için `npm version minor`, uyumsuz değişiklik için
+   `npm version major`. Komut `manifest.json` ve `versions.json` dosyalarını günceller, commit'ler ve `v` öneki
+   olmadan etiket oluşturur. `minAppVersion` değişecekse önce `manifest.json` içinde değiştirin.
+4. **Gönderin:**
+
+   ```bash
+   git push origin main
+   git push origin <sürüm>      # örneğin 1.2.0; release iş akışını başlatır
+   ```
+
+5. **Yayınlayın:** **Releases** altındaki taslağa `CHANGELOG.md` notlarını yapıştırın, eklerin `main.js`,
+   `manifest.json`, `styles.css` olduğunu kontrol edin ve **Publish release** deyin.
+6. **Dizini kontrol edin:** Dizin yeni sürümü kendiliğinden tarar. Beklemek istemezseniz eklenti sayfasında
+   **… → Check for new releases** veya **… → Request review** seçin.
+
+**Dikkat edilecekler:**
+
+- Commit'ler deponun yerel ayarındaki GitHub gizli e-posta adresiyle (`…@users.noreply.github.com`) yazılır;
+  kurumsal adres görünmez. Commit mesajlarına araç veya yapay zekâ ortak yazar satırları eklenmez.
+- Yayınlanmış bir sürümün etiketi değiştirilmez; düzeltme her zaman yeni bir sürümle yapılır.
+
+**Duyuru (isteğe bağlı):** Obsidian forumunda [Share & showcase](https://forum.obsidian.md/c/share-showcase/9) ve
+Discord'da `#updates` kanalı (bunun için `developer` rolü gerekir). Eklenti artık desteklenemeyecekse dizinden
+**Archive** edin veya sahipliği devredin.
 
 ## 10. Release öncesi manuel test listesi
 
@@ -292,6 +330,7 @@ kullanmayın):
 | 10 | Senkronize edilmiş klasöre yeni not ekleyip yayınla | Sayfa, o klasörün XWiki sayfasının altında oluşur. |
 | 11 | Folder notes eklentisi **kapalıyken** alt sayfalı bir space'i sync et | Alt sayfası olan sayfalar `Klasör/Klasör.md` olarak yazılır; klasör notu dosya gezgininde gizlenir; klasör adına tıklayınca içerik açılır, ok simgesi klasörü açıp kapatır. |
 | 12 | Bir klasörü yeniden adlandır; sonra **Folder note location** ayarını değiştirip tekrar sync et | Klasör notu klasörle birlikte yeniden adlandırılır; ayar değişince çekilmiş klasör notları yeni düzene taşınır. |
+| 12a | Notu olmayan bir klasöre sağ tıklayıp **Create folder note**, notu olan bir klasörde **Open folder note** seç | Klasör notu oluşturulup açılır ve gezginde gizlenir; var olan not açılır. |
 | 13 | Bir klasör notunu (`Klasör/Klasör.md`) yayınla | Klasörün kendi sayfası güncellenir; `Klasör.Klasör` gibi bir sayfa oluşmaz. |
 | 14 | **Keep XWiki macros** açıkken `{{toc/}}` ve `{{info}}` makroları içeren `xwiki/2.1` sayfasını pull edip yayınla | Not makroları metin olarak içerir; yayından sonra XWiki'de makrolar çalışır. Ayar kapalıyken makrolar link/çıktı olarak gelir. |
 | 15 | İkinci sütundan itibaren boş hücreler içeren tabloyu yayınla | XWiki'de sütun yapısı korunur; pull sonrası hücreler yine boş. |
