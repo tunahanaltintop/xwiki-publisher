@@ -1,6 +1,6 @@
 {
   "name": "xwiki-publisher",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Publish notes to XWiki and sync XWiki pages back into your vault as Markdown, using an XWiki access token.",
   "main": "main.js",
   "type": "module",
