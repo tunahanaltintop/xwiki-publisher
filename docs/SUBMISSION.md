@@ -290,8 +290,8 @@ kullanmayın):
 | 8 | `xwiki/2.1` sayfası içeren space'i sync et | Sayfa Markdown'a çevrilir; panelde dönüşüm uyarısı görünür. |
 | 9 | XWiki'de bir sayfanın başlığını değiştir, tekrar sync | Not yeniden adlandırılır, linkler güncellenir. |
 | 10 | Senkronize edilmiş klasöre yeni not ekleyip yayınla | Sayfa, o klasörün XWiki sayfasının altında oluşur. |
-| 11 | Folder notes kurulu vault'ta alt sayfalı bir space'i sync et | Alt sayfası olan sayfalar `Klasör/Klasör.md` olarak yazılır; klasöre tıklayınca içerik açılır. |
-| 12 | Folder notes'ta *Storage location* değiştir, **Use Folder notes settings → Copy**, tekrar sync | Çekilmiş klasör notları yeni düzene taşınır. |
+| 11 | Folder notes eklentisi **kapalıyken** alt sayfalı bir space'i sync et | Alt sayfası olan sayfalar `Klasör/Klasör.md` olarak yazılır; klasör notu dosya gezgininde gizlenir; klasör adına tıklayınca içerik açılır, ok simgesi klasörü açıp kapatır. |
+| 12 | Bir klasörü yeniden adlandır; sonra **Folder note location** ayarını değiştirip tekrar sync et | Klasör notu klasörle birlikte yeniden adlandırılır; ayar değişince çekilmiş klasör notları yeni düzene taşınır. |
 | 13 | Bir klasör notunu (`Klasör/Klasör.md`) yayınla | Klasörün kendi sayfası güncellenir; `Klasör.Klasör` gibi bir sayfa oluşmaz. |
 | 14 | **Keep XWiki macros** açıkken `{{toc/}}` ve `{{info}}` makroları içeren `xwiki/2.1` sayfasını pull edip yayınla | Not makroları metin olarak içerir; yayından sonra XWiki'de makrolar çalışır. Ayar kapalıyken makrolar link/çıktı olarak gelir. |
 | 15 | İkinci sütundan itibaren boş hücreler içeren tabloyu yayınla | XWiki'de sütun yapısı korunur; pull sonrası hücreler yine boş. |

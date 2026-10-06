@@ -43,6 +43,24 @@ export function folderNotePath(folderPath: string, options: LocationOptions, loc
 }
 
 /**
+ * Folder a note would be the folder note of in the configured layout, or `null`. The folder itself may not exist;
+ * callers check that. Inside the folder it is the note's own folder; next to it, the folder named after the note.
+ */
+export function folderForNote(filePath: string, options: LocationOptions): string | null {
+	if (!filePath.endsWith(".md")) return null;
+	if (options.folderNoteLocation === "inside") return ownFolder(filePath, options);
+	const slash = filePath.lastIndexOf("/");
+	const parent = slash < 0 ? "" : filePath.slice(0, slash);
+	const basename = filePath.slice(slash + 1, -".md".length);
+	const template = options.folderNoteName?.includes(FOLDER_NAME) ? options.folderNoteName : FOLDER_NAME;
+	const [before, after] = [template.slice(0, template.indexOf(FOLDER_NAME)), template.slice(template.indexOf(FOLDER_NAME) + FOLDER_NAME.length)];
+	if (!basename.startsWith(before) || !basename.endsWith(after) || basename.length <= before.length + after.length) return null;
+	const name = basename.slice(before.length, basename.length - after.length);
+	const folder = parent ? `${parent}/${name}` : name;
+	return folderNotePath(folder, options, "parent") === filePath ? folder : null;
+}
+
+/**
  * When folder notes are stored inside their folder, the folder a note is the folder note of, or `null`.
  * Such a note stands for its folder: it is published as the folder's page, not as a page below it.
  */

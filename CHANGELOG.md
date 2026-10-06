@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0
+
+- Built-in folder notes: selecting a folder in the file explorer opens its folder note, folder notes are hidden from the explorer and follow their folder when it is renamed or moved, and folders get "Create folder note" / "Open folder note" menu items. The Folder notes plugin is no longer needed; its layouts stay supported.
+
 ## 1.1.0
 
 - Requires Obsidian 1.13.0 or later. The settings tab and confirmation buttons use only the current Obsidian APIs; the classic settings tab for older Obsidian versions was removed.

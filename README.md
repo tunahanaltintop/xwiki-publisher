@@ -18,8 +18,8 @@ they keep their Markdown source and can travel both ways.
 - The vault folder structure is **mirrored** as nested XWiki pages, and pulled pages recreate the XWiki page tree in
   the vault.
 - **Conflict protection** in both directions: nothing is overwritten silently when a note and its page both changed.
-- Works with the [Folder notes](https://github.com/LostPaul/obsidian-folder-notes) plugin: XWiki pages that have
-  children become folder notes, so selecting a folder shows the parent page's content.
+- **Built-in folder notes**: XWiki pages that have children become folder notes, and selecting a folder in the file
+  explorer shows the parent page's content. No other plugin is needed.
 - A **side panel** with every action, the note's target page, its sync state and recent activity.
 - The access token is kept in Obsidian's **secret storage**, never in the plugin's data file.
 
@@ -139,27 +139,37 @@ changes to Markdown and its macros are lost.
 ### Folder notes
 
 In XWiki a page can have content *and* child pages. In the vault, its children live in a folder, and the page itself
-becomes that folder's **folder note**. With the [Folder notes](https://github.com/LostPaul/obsidian-folder-notes)
-plugin by Lost Paul ([documentation](https://lostpaul.github.io/obsidian-folder-notes/)) installed, selecting the
-folder opens the page's content.
+becomes that folder's **folder note**. Folder notes are built in; no other plugin is needed:
+
+- Selecting a folder's name in the file explorer opens its folder note. The arrow still expands and collapses the
+  folder, and folders with a folder note are underlined.
+- Folder notes are hidden from the file explorer, so the folder shows only its children.
+- Renaming or moving a folder renames or moves its folder note too.
+- A folder without a folder note gets **Create folder note** in its context menu; one with a note gets **Open folder
+  note**.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | Folder note location | Inside the folder | `Projects/Projects.md` (inside) or `Projects.md` next to `Projects/`. |
-| Folder note name | `{{folder_name}}` | File name of folder notes, as in Folder notes. |
+| Folder note name | `{{folder_name}}` | File name template of folder notes. |
+| Open folder notes from the file explorer | On | Selecting a folder opens its folder note. |
+| Hide folder notes in the file explorer | On | Folder notes are not listed in the explorer. |
+| Rename folder notes with their folder | On | The folder note follows renames and moves of its folder. |
 
-The defaults match the Folder notes defaults. If you changed Folder notes' *Storage location* or *Folder note name*,
-select **Use Folder notes settings → Copy** in **Settings → XWiki Publisher**; the settings page also warns when the
-two plugins disagree. Notes already pulled from XWiki move to the new layout on the next sync. Folder notes' *vault
-folder* storage location and non-Markdown folder note types (canvas, base) are not supported.
+The layouts are the same as those of the [Folder notes](https://github.com/LostPaul/obsidian-folder-notes) plugin by
+Lost Paul, so a vault organised with it keeps working: select **Use Folder notes settings → Copy** to take over its
+layout, then disable it so folders are not handled twice (the settings page warns while both are enabled). Notes
+already pulled from XWiki move to a new layout on the next sync. Folder notes' *vault folder* storage location and
+non-Markdown folder notes (canvas, base) are not supported.
+
+The file explorer has no public API for these features, so they work on its interface, like other folder note
+plugins; each of them can be turned off.
 
 Folder notes are also respected when publishing:
 
 - A folder note is published as its folder's page (`Docs.Projects.WebHome` for `Projects/Projects.md`), not as a page
   below it, and its title is the folder name unless `xwiki-title` is set.
 - A note created inside a folder whose folder note was pulled from XWiki is published below that page.
-
-Folder notes is an independent plugin; XWiki Publisher works without it, the folder notes are then regular notes.
 
 ### Conflicts
 
@@ -205,7 +215,10 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
 | **Folder notes** | | |
 | Folder note location | Inside the folder | Inside (`X/X.md`) or next to the folder (`X.md`). |
 | Folder note name | `{{folder_name}}` | File name template of folder notes. |
-| Use Folder notes settings | – | Copies both settings from the Folder notes plugin. |
+| Open folder notes from the file explorer | On | Selecting a folder opens its folder note. |
+| Hide folder notes in the file explorer | On | Folder notes are not listed in the explorer. |
+| Rename folder notes with their folder | On | The folder note follows renames and moves of its folder. |
+| Use Folder notes settings | – | Copies the layout from the Folder notes plugin, for vaults that used it. |
 
 ## Limitations
 

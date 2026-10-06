@@ -196,3 +196,18 @@ test("recognises attachment files renamed to avoid a clash", () => {
 	assert.equal(numberedMatch("img.png", "img 1.jpg"), false);
 	assert.equal(numberedMatch("a(1).pdf", "a(1) 2.pdf"), true);
 });
+
+import { folderForNote } from "../src/location.ts";
+
+test("finds the folder a note is the folder note of", () => {
+	const inside = { defaultSpace: "", mirrorFolders: true, nestedPages: true, folderNoteLocation: "inside" as const, folderNoteName: "{{folder_name}}" };
+	const parent = { ...inside, folderNoteLocation: "parent" as const };
+	assert.equal(folderForNote("A/B/B.md", inside), "A/B");
+	assert.equal(folderForNote("A/B/C.md", inside), null);
+	assert.equal(folderForNote("A/B.md", parent), "A/B");
+	assert.equal(folderForNote("B.md", parent), "B");
+	assert.equal(folderForNote("A/B (folder).md", { ...parent, folderNoteName: "{{folder_name}} (folder)" }), "A/B");
+	assert.equal(folderForNote("A/Other.md", { ...parent, folderNoteName: "{{folder_name}} (folder)" }), null);
+	assert.equal(folderForNote("A/B/_index.md", { ...inside, folderNoteName: "_index" }), "A/B");
+	assert.equal(folderForNote("A/B.png", parent), null);
+});

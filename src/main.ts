@@ -12,6 +12,7 @@ import {
 	serializeReference,
 } from "./location";
 import { choose, prompt } from "./modals";
+import { FolderNotes } from "./folder-notes";
 import { DEFAULT_SETTINGS, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
 import { AttachmentPaths, AttachmentVersions, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
@@ -41,6 +42,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 	attachmentVersions: AttachmentVersions = {};
 	uploadedAttachments: UploadedAttachments = {};
 	private sync = new SyncService(this);
+	readonly folderNotes = new FolderNotes(this);
 	/** Recent results, newest first, shown in the side panel. */
 	activity: ActivityEntry[] = [];
 	/** Label of the operation in progress, if any. */
@@ -55,6 +57,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.addSettingTab(new XWikiPublisherSettingTab(this.app, this));
+		this.folderNotes.register();
 		this.registerView(VIEW_TYPE_XWIKI, (leaf: WorkspaceLeaf) => new XWikiPanelView(leaf, this));
 
 		this.addRibbonIcon("book-open", "Open XWiki panel", () => void this.activateView());
@@ -274,6 +277,13 @@ export default class XWikiPublisherPlugin extends Plugin {
 		await this.saveSettings();
 		const typeNote = folderNotes.type === ".md" ? "" : " Folder notes creates other file types by default; pulled folder notes are always Markdown.";
 		return `Folder note settings copied. Notes pulled from XWiki move to the new layout on the next sync.${typeNote}`;
+	}
+
+	/** Whether the Folder notes community plugin is enabled in this vault (its features overlap with ours). */
+	isFolderNotesPluginEnabled(): boolean {
+		// The list of enabled plugins is not part of the public API; this is only used to show a warning.
+		const plugins = (this.app as unknown as { plugins?: { enabledPlugins?: Set<string> } }).plugins;
+		return plugins?.enabledPlugins?.has("folder-notes") ?? false;
 	}
 
 	/** Describes how the plugin's folder note settings differ from the Folder notes plugin, if they do. */

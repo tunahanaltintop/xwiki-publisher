@@ -9,7 +9,7 @@ Bulunan sorunlar düzeltildi; bu belge yapılanları ve bilinen sınırlamaları
 | Kontrol | Sonuç |
 | --- | --- |
 | TypeScript (`tsc --noEmit`, strict) | Hatasız |
-| Birim testleri (`npm test`) | 47/47 geçti |
+| Birim testleri (`npm test`) | 48/48 geçti |
 | Resmi ESLint kuralları (`npm run lint`) | 0 hata, 0 uyarı |
 | Production build (`npm run build`) | Başarılı |
 
@@ -173,6 +173,21 @@ Obsidian Community dizininin otomatik incelemesindeki tavsiye ve uyarılar gider
 - **1.1.0:** En düşük Obsidian sürümü 1.13.0'a yükseltildi; `display()` ve `setWarning` yedek yolları kaldırıldı.
   Ayar sekmesi yalnızca bildirimsel API ile çiziliyor ve satır görünürlüğü `update()` ile yenileniyor.
 - Gereksiz bir tip dönüşümü ve kullanılmayan bir CSS sınıfı kaldırıldı.
+
+## Dahili klasör notları (1.2.0)
+
+Folder notes eklentisine bağımlılık kaldırıldı; kullanılan özellikleri plugin'e alındı (`src/folder-notes.ts`):
+
+- Dosya gezgininde klasör adına tıklamak klasör notunu açıyor; ok simgesi klasörü açıp kapatmaya devam ediyor.
+- Klasör notları gezginde gizleniyor; klasör notu olan klasörlerin adı noktalı çizgiyle işaretleniyor.
+- Klasör yeniden adlandırılınca veya taşınınca klasör notu da yeniden adlandırılıyor. Sync sırasında plugin'in kendi
+  taşımaları bu kurala dahil edilmiyor.
+- Klasörlerin sağ tık menüsünde **Create folder note** ve **Open folder note** seçenekleri var.
+- Dosya gezgininin resmi API'si olmadığı için özellik, Folder notes'un da kullandığı gezgin yapısı üzerinden
+  (`.nav-folder-title[data-path]`, `.nav-file-title[data-path]`) çalışıyor. Her parça ayrı ayarla kapatılabiliyor;
+  gezgin yeniden çizildiğinde `MutationObserver` ile işaretler yeniden uygulanıyor ve eklenti kapanınca kaldırılıyor.
+- Folder notes etkinse ayarlarda uyarı gösteriliyor; bunun için etkin eklenti listesi (resmi olmayan API) yalnızca
+  okunuyor.
 
 ## Bilinçli tasarım kararları
 

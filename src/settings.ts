@@ -32,6 +32,12 @@ export interface XWikiPublisherSettings {
 	folderNoteLocation: FolderNoteLocation;
 	/** Folder note file name template, as in the Folder notes plugin. */
 	folderNoteName: string;
+	/** Selecting a folder in the file explorer opens its folder note. */
+	openFolderNotes: boolean;
+	/** Folder notes are hidden from the file explorer. */
+	hideFolderNotes: boolean;
+	/** Renaming or moving a folder renames or moves its folder note too. */
+	renameFolderNotes: boolean;
 }
 
 export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
@@ -53,6 +59,9 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	attachmentFolder: "assets",
 	folderNoteLocation: "inside",
 	folderNoteName: "{{folder_name}}",
+	openFolderNotes: true,
+	hideFolderNotes: true,
+	renameFolderNotes: true,
 };
 
 /** One row of the settings tab, rendered through the declarative settings API. */
@@ -99,10 +108,13 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 		const settings = this.plugin.settings;
 
 		const folderNotesIntro = createFragment((fragment) => {
-			fragment.appendText("Where the folder note of a folder is stored. Pages with children are written as folder notes; match this with the ");
+			fragment.appendText(
+				"Where the folder note of a folder is stored. Pages with children are written as folder notes. Both layouts are the ones of the ",
+			);
 			fragment.createEl("a", { text: "Folder notes", href: "https://github.com/LostPaul/obsidian-folder-notes" });
-			fragment.appendText(" plugin.");
+			fragment.appendText(" plugin, which is not needed.");
 		});
+		const decorate = () => this.plugin.folderNotes.refresh();
 
 		return [
 			{
@@ -333,6 +345,7 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 									.onChange((value) => {
 										settings.folderNoteLocation = value as FolderNoteLocation;
 										void this.save();
+										decorate();
 									}),
 							),
 					},
@@ -347,12 +360,48 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 									.onChange((value) => {
 										settings.folderNoteName = value.trim() || DEFAULT_SETTINGS.folderNoteName;
 										void this.save();
+										decorate();
 									}),
 							),
 					},
 					{
+						name: "Open folder notes from the file explorer",
+						desc: "Selecting a folder's name opens its folder note; the arrow still expands and collapses the folder.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.openFolderNotes).onChange((value) => {
+									settings.openFolderNotes = value;
+									void this.save();
+									decorate();
+								}),
+							),
+					},
+					{
+						name: "Hide folder notes in the file explorer",
+						desc: "Folder notes are not listed inside or next to their folder.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.hideFolderNotes).onChange((value) => {
+									settings.hideFolderNotes = value;
+									void this.save();
+									decorate();
+								}),
+							),
+					},
+					{
+						name: "Rename folder notes with their folder",
+						desc: "Renaming or moving a folder renames or moves its folder note too.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.renameFolderNotes).onChange((value) => {
+									settings.renameFolderNotes = value;
+									void this.save();
+								}),
+							),
+					},
+					{
 						name: "Use Folder notes settings",
-						desc: "Copies the storage location and name of the Folder notes plugin.",
+						desc: "Copies the storage location and name from the Folder notes plugin, when you used it before.",
 						build: (setting) => {
 							setting.addButton((button) =>
 								button.setButtonText("Copy").onClick(() => {
@@ -365,6 +414,12 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 							void this.plugin.folderNotesMismatch().then((mismatch) => {
 								if (mismatch) setting.descEl.createDiv({ cls: "xwiki-publisher-warning", text: mismatch });
 							});
+							if (this.plugin.isFolderNotesPluginEnabled()) {
+								setting.descEl.createDiv({
+									cls: "xwiki-publisher-warning",
+									text: "The Folder notes plugin is enabled too: disable it, or turn off the options above, so folders are not handled twice.",
+								});
+							}
 						},
 					},
 				],
