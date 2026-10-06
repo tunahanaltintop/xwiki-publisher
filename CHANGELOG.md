@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- Folders with a folder note are marked with a dotted underline drawn as a border, which every supported Obsidian version renders the same way.
+
 ## 1.2.0
 
 - Built-in folder notes: selecting a folder in the file explorer opens its folder note, folder notes are hidden from the explorer and follow their folder when it is renamed or moved, and folders get "Create folder note" / "Open folder note" menu items. The Folder notes plugin is no longer needed; its layouts stay supported.

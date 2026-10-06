@@ -21,8 +21,8 @@ XWiki tarafında yapılması gerekenler ayrı bir belgededir: [XWIKI_SETUP.md](X
 | --- | --- |
 | Dizin sayfası | https://community.obsidian.md/plugins/xwiki-publisher |
 | Depo | https://github.com/tunahanaltintop/xwiki-publisher (herkese açık, MIT) |
-| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0` (en düşük Obsidian sürümü 1.13.0) |
-| Hazırlanan sürüm | `1.2.0`: dahili klasör notları |
+| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
+| Son sürümler | `1.2.0`: dahili klasör notları; `1.2.1`: CSS uyumluluk düzeltmesi |
 | Otomatik inceleme | Hata ve uyarı yok; `1.1.0` ile son tavsiyeler de giderildi (bkz. §8). |
 
 İlk gönderim tamamlandı; §0–§7 o sürecin kaydıdır. Yeni bir sürüm için yalnızca **§9 Yeni sürüm yayınlama** adımları
@@ -267,6 +267,12 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Build verification başarısız | Release'i elle değil iş akışıyla oluşturun; `package-lock.json` commit'lenmiş olmalı ve `npm ci` kullanılmalı. |
 | Etiket ile sürüm uyuşmuyor | Etiket `1.0.0` olmalı, `v1.0.0` değil. |
 | "Invalid identifier" | `id` yayınlandıktan sonra değiştirilemez; Obsidian Discord'undaki `#community-directory` kanalına yazın. |
+
+### Sonraki incelemelerde çıkanlar
+
+| Sürüm | Bölüm | Bulgu | Yapılan |
+| --- | --- | --- | --- |
+| 1.2.0 | CSS lint | Warning: `text-decoration` kısaltması eski Obsidian sürümlerinde kısmen destekleniyor (`styles.css`) | 1.2.1'de giderildi: işaret `border-bottom` ile çiziliyor. |
 
 ### İlk gönderimin inceleme sonucu (1.0.0)
 

@@ -82,8 +82,7 @@
 
 /* Built-in folder notes in the file explorer. */
 .nav-folder-title.xwiki-has-folder-note .nav-folder-title-content {
-	text-decoration: underline dotted var(--text-faint);
-	text-underline-offset: 3px;
+	border-bottom: 1px dotted var(--text-faint);
 }
 
 .xwiki-folder-note-hidden {
