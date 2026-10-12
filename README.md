@@ -259,10 +259,18 @@ npm run dev     # watch build; copies the build to OBSIDIAN_PLUGIN_DIR from .env
 npm run build   # type check and production build
 npm run lint    # Obsidian's official ESLint rules
 npm test        # unit tests
+npm run dev-vault   # creates the test vault with sample notes and installs a build in it
 ```
 
 To try a build, copy `main.js`, `manifest.json` and `styles.css` to `<vault>/.obsidian/plugins/xwiki-publisher/`, or
 copy `.env.example` to `.env` and point `OBSIDIAN_PLUGIN_DIR` at that folder.
+
+`npm run dev-vault` sets up the vault `OBSIDIAN_PLUGIN_DIR` points into: it copies the sample notes from
+`dev/sample-vault` (folders, folder notes, links, an image, tables, a conflict copy), enables the plugin, sets the
+default space to `ObsidianTest` and installs a production build. Notes already in the vault are kept; run
+`node --env-file=.env scripts/setup-dev-vault.mjs --reset` to restore the sample notes. Then open the folder as a vault
+in Obsidian, turn off restricted mode once, and set the XWiki URL and token. With `npm run dev` running, each change is
+rebuilt into the vault; the [Hot Reload](https://github.com/pjeby/hot-reload) plugin reloads it automatically.
 
 Release and submission steps are described in [docs/SUBMISSION.md](docs/SUBMISSION.md) (Turkish).
 

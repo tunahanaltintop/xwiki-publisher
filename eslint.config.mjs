@@ -2,7 +2,7 @@ import { defineConfig } from "eslint/config";
 import obsidianmd from "eslint-plugin-obsidianmd";
 
 export default defineConfig([
-	{ ignores: ["main.js", "node_modules/**", "tests/**", "*.mjs"] },
+	{ ignores: ["main.js", "node_modules/**", "tests/**", "scripts/**", "*.mjs"] },
 	...obsidianmd.configs.recommended,
 	{
 		languageOptions: {
