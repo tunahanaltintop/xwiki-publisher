@@ -59,13 +59,15 @@ shows, for the current note, the XWiki page it maps to, whether it is in sync, a
 | Action | Where | What it does |
 | --- | --- | --- |
 | Publish current note | Panel, command palette, file menu | Creates or updates the note's XWiki page and uploads its attachments. |
+| Publish folder to XWiki | Panel, command palette, folder menu | Publishes every note in a folder and its subfolders, folder notes first. |
 | Pull current note from XWiki | Panel, command palette, file menu | Updates the note from its XWiki page. |
 | Check XWiki | Panel | Tells whether the page changed on XWiki since the last sync. |
 | Import page from XWiki | Panel, command palette | Imports one page given by URL or reference (`Space.Page`). |
 | Sync space from XWiki | Panel, command palette | Pulls a page and every page below it, given by URL or space reference. |
 | Open published page in browser | Panel, command palette | Opens the page saved in the note's `xwiki-url` property. |
 
-Only one XWiki operation runs at a time. A running space sync shows its progress in the panel and can be cancelled.
+Only one XWiki operation runs at a time. A running space sync or folder publish shows its progress in the panel and can
+be cancelled.
 
 ### Where a note is published
 
@@ -179,6 +181,8 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
 - **Pull**: when the note and the page both changed, you choose between *Keep both* and *Overwrite local note*.
   **Sync** keeps your note and writes the XWiki version next to it as `<Note> (XWiki conflict).md`.
 - **Publish**: when the page changed on XWiki since the last sync, you are asked before it is overwritten.
+- **Publish folder**: notes in sync with their page are skipped. Pages changed on XWiki since the last sync, or not
+  written in Markdown, are skipped and listed in the result, unless you choose *Publish and overwrite*.
 
 ### Note properties
 

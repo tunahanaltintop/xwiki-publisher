@@ -1,4 +1,4 @@
-import { Menu, normalizePath, Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
+import { Menu, normalizePath, Notice, Plugin, TAbstractFile, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { convertNote, ResolvedLink } from "./converter";
 import {
 	folderPages,
@@ -7,22 +7,35 @@ import {
 	noteName,
 	noteTitle,
 	PageLocation,
+	pageChain,
 	pageDisplayName,
 	parseSpaceInput,
 	serializeReference,
 } from "./location";
-import { choose, prompt } from "./modals";
+import { choose, chooseFolder, prompt } from "./modals";
 import { FolderNotes } from "./folder-notes";
 import { DEFAULT_SETTINGS, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
 import { AttachmentPaths, AttachmentVersions, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
-import { XWikiClient } from "./xwiki-client";
+import { RemotePage, XWikiClient } from "./xwiki-client";
 
 interface PluginData extends Partial<XWikiPublisherSettings> {
 	syncState?: SyncState;
 	attachmentPaths?: AttachmentPaths;
 	attachmentVersions?: AttachmentVersions;
 	uploadedAttachments?: UploadedAttachments;
+}
+
+/** How publishing treats a page that changed on XWiki or is not Markdown: ask, leave it, or overwrite it. */
+type OverwriteMode = "ask" | "skip" | "overwrite";
+
+interface NotePublishResult {
+	outcome: "created" | "updated" | "unchanged" | "skipped";
+	/** Why the page was not overwritten, for `skipped`. */
+	reason?: string;
+	uploaded: number;
+	/** Attachments that could not be uploaded. */
+	failed: string[];
 }
 
 export interface ActivityEntry {
@@ -47,7 +60,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 	activity: ActivityEntry[] = [];
 	/** Label of the operation in progress, if any. */
 	busy: string | null = null;
-	/** Whether the running operation can be stopped from the panel (space sync). */
+	/** Whether the running operation can be stopped from the panel (space sync, folder publish). */
 	cancellable = false;
 	private cancelRequested = false;
 	private listeners = new Set<() => void>();
@@ -76,6 +89,12 @@ export default class XWikiPublisherPlugin extends Plugin {
 				if (!checking) void this.publish(file);
 				return true;
 			},
+		});
+
+		this.addCommand({
+			id: "publish-folder",
+			name: "Publish folder to XWiki",
+			callback: () => void this.publishFolder(),
 		});
 
 		this.addCommand({
@@ -115,6 +134,15 @@ export default class XWikiPublisherPlugin extends Plugin {
 
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile) => {
+				if (file instanceof TFolder) {
+					menu.addItem((item) =>
+						item
+							.setTitle("Publish folder to XWiki")
+							.setIcon("upload-cloud")
+							.onClick(() => void this.publishFolder(file)),
+					);
+					return;
+				}
 				if (!(file instanceof TFile) || file.extension !== "md") return;
 				menu.addItem((item) =>
 					item
@@ -191,7 +219,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 		this.changed();
 	}
 
-	/** Asks the running space sync to stop after the current page. */
+	/** Asks the running space sync or folder publish to stop after the current page. */
 	cancel(): void {
 		if (!this.cancellable) return;
 		this.cancelRequested = true;
@@ -370,13 +398,15 @@ export default class XWikiPublisherPlugin extends Plugin {
 	}
 
 	/**
-	 * Asks before publishing over a page that is not written in Markdown (its syntax would change and XWiki-only
-	 * content such as macros would be lost), or that was edited on XWiki since the note was last synced.
+	 * Decides whether to publish over an existing page that is not written in Markdown (its syntax would change and
+	 * XWiki-only content such as macros would be lost), or that was edited on XWiki since the note was last synced.
+	 * `ask` asks the user; `skip` and `overwrite` decide without asking, for folder publishing.
+	 * Returns why the page must not be overwritten, or `null` when it may be.
 	 */
-	private async confirmOverwrite(client: XWikiClient, file: TFile, location: PageLocation): Promise<boolean> {
-		const remote = await client.getPage(location);
-		if (!remote) return true;
+	private async overwriteBlocker(file: TFile, location: PageLocation, remote: RemotePage | null, mode: OverwriteMode): Promise<string | null> {
+		if (!remote || mode === "overwrite") return null;
 		if (!/^markdown\//i.test(remote.syntax)) {
+			if (mode === "skip") return `written in ${remote.syntax}`;
 			const convert = await choose(
 				this.app,
 				"XWiki page is not Markdown",
@@ -390,10 +420,11 @@ export default class XWikiPublisherPlugin extends Plugin {
 					{ label: "Cancel", value: false },
 				],
 			);
-			if (convert !== true) return false;
+			if (convert !== true) return "cancelled";
 		}
 		const synced = this.sync.lastSyncedVersion(file);
-		if (!synced || remote.version === synced) return true;
+		if (!synced || remote.version === synced) return null;
+		if (mode === "skip") return "changed on XWiki";
 		const answer = await choose(
 			this.app,
 			"XWiki page changed",
@@ -403,16 +434,21 @@ export default class XWikiPublisherPlugin extends Plugin {
 				{ label: "Cancel", value: false },
 			],
 		);
-		return answer === true;
+		return answer === true ? null : "cancelled";
 	}
 
-	/** Creates missing pages for the note's folders; existing pages are never touched. */
-	private async ensureFolderPages(client: XWikiClient, file: TFile): Promise<void> {
+	/**
+	 * Creates missing pages for the note's folders; existing pages are never touched.
+	 * `known` holds references of pages known to exist, so a folder publish checks each folder only once.
+	 */
+	private async ensureFolderPages(client: XWikiClient, file: TFile, known?: Set<string>): Promise<void> {
 		if (!this.settings.createFolderPages) return;
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
 		for (const { location, title } of folderPages(file.path, fm, this.settings, this.sync.folderAnchor)) {
-			if (await client.getPage(location)) continue;
-			await client.putPage(location, { title, content: "", syntax: "xwiki/2.1" });
+			const reference = serializeReference(location);
+			if (known?.has(reference)) continue;
+			if (!(await client.getPage(location))) await client.putPage(location, { title, content: "", syntax: "xwiki/2.1" });
+			known?.add(reference);
 		}
 	}
 
@@ -426,71 +462,208 @@ export default class XWikiPublisherPlugin extends Plugin {
 
 		const notice = new Notice(`Publishing "${file.basename}" to XWiki…`, 0);
 		try {
-			const location = this.sync.locate(file);
-			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-			const content = await this.app.vault.cachedRead(file);
-
-			const resolve = (linkpath: string): ResolvedLink | null => {
-				const target = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
-				if (!target) return null;
-				if (target.extension === "md") {
-					return { kind: "page", url: client.viewUrl(this.sync.locate(target)) };
-				}
-				// Files downloaded from this page keep their XWiki name, even when the vault file was renamed to avoid a clash.
-				const name = this.sync.attachmentNameFor(location, target.path) ?? target.name;
-				return { kind: "attachment", vaultPath: target.path, name, url: client.attachmentUrl(location, name) };
-			};
-
-			const { markdown, attachments } = convertNote(content, resolve);
-
 			await this.ensureSyntaxAvailable(client, this.settings.syntax);
-			if (!(await this.confirmOverwrite(client, file, location))) {
-				notice.hide();
-				return;
-			}
-			await this.ensureFolderPages(client, file);
-			const created = await client.putPage(location, {
-				title: noteTitle(noteName(file.path, file.basename, this.settings), fm),
-				content: markdown,
-				syntax: this.settings.syntax,
-			});
-
-			let uploaded = 0;
-			const failed: string[] = [];
-			if (this.settings.uploadAttachments) {
-				for (const [name, vaultPath] of attachments) {
-					const attachment = this.app.vault.getFileByPath(vaultPath);
-					if (!attachment) continue;
-					notice.setMessage(`Uploading ${name}…`);
-					try {
-						await client.putAttachment(location, name, await this.app.vault.readBinary(attachment));
-						this.sync.trackUpload(location, name, vaultPath);
-						uploaded++;
-					} catch (error) {
-						console.error(`XWiki Publisher: failed to upload ${name}`, error);
-						failed.push(name);
-					}
-				}
-			}
-
-			const url = client.viewUrl(location);
-			if (this.settings.writeUrlToFrontmatter) {
-				await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-					frontmatter[FM_URL] = url;
-				});
-			}
-			// Attachment uploads create page versions too, so read the version once everything is saved.
-			const remote = await client.getPage(location);
-			if (remote) await this.sync.recordSync(file, remote.version);
-
+			const result = await this.publishNote(client, file, { mode: "ask", status: (message) => notice.setMessage(message) });
 			notice.hide();
-			let message = `${created ? "Created" : "Updated"} XWiki page "${file.basename}".`;
-			if (uploaded > 0) message += ` ${uploaded} attachment(s) uploaded.`;
-			if (failed.length > 0) message += ` Failed to upload: ${failed.join(", ")}.`;
-			this.report(message, failed.length > 0);
+			if (result.outcome === "skipped") return;
+			let message = `${result.outcome === "created" ? "Created" : "Updated"} XWiki page "${file.basename}".`;
+			if (result.uploaded > 0) message += ` ${result.uploaded} attachment(s) uploaded.`;
+			if (result.failed.length > 0) message += ` Failed to upload: ${result.failed.join(", ")}.`;
+			this.report(message, result.failed.length > 0);
 		} catch (error) {
 			notice.hide();
 			console.error("XWiki Publisher: publish failed", error);
+			this.report(`Publishing to XWiki failed: ${errorMessage(error)}`, true);
+		}
+	}
+
+	/**
+	 * Publishes one note: creates or updates its page, uploads its attachments and records the sync.
+	 * With `skipUnchanged`, a note that is in sync with its page is left alone.
+	 */
+	private async publishNote(
+		client: XWikiClient,
+		file: TFile,
+		options: { mode: OverwriteMode; status: (message: string) => void; skipUnchanged?: boolean; knownPages?: Set<string> },
+	): Promise<NotePublishResult> {
+		const location = this.sync.locate(file);
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		const content = await this.app.vault.cachedRead(file);
+
+		const resolve = (linkpath: string): ResolvedLink | null => {
+			const target = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
+			if (!target) return null;
+			if (target.extension === "md") {
+				return { kind: "page", url: client.viewUrl(this.sync.locate(target)) };
+			}
+			// Files downloaded from this page keep their XWiki name, even when the vault file was renamed to avoid a clash.
+			const name = this.sync.attachmentNameFor(location, target.path) ?? target.name;
+			return { kind: "attachment", vaultPath: target.path, name, url: client.attachmentUrl(location, name) };
+		};
+
+		const { markdown, attachments } = convertNote(content, resolve);
+
+		const remote = await client.getPage(location);
+		if (options.skipUnchanged && remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content)) {
+			options.knownPages?.add(serializeReference(location));
+			return { outcome: "unchanged", uploaded: 0, failed: [] };
+		}
+		const blocker = await this.overwriteBlocker(file, location, remote, options.mode);
+		if (blocker) return { outcome: "skipped", reason: blocker, uploaded: 0, failed: [] };
+
+		await this.ensureFolderPages(client, file, options.knownPages);
+		const created = await client.putPage(location, {
+			title: noteTitle(noteName(file.path, file.basename, this.settings), fm),
+			content: markdown,
+			syntax: this.settings.syntax,
+		});
+		options.knownPages?.add(serializeReference(location));
+
+		let uploaded = 0;
+		const failed: string[] = [];
+		if (this.settings.uploadAttachments) {
+			for (const [name, vaultPath] of attachments) {
+				const attachment = this.app.vault.getFileByPath(vaultPath);
+				if (!attachment) continue;
+				options.status(`Uploading ${name}…`);
+				try {
+					await client.putAttachment(location, name, await this.app.vault.readBinary(attachment));
+					this.sync.trackUpload(location, name, vaultPath);
+					uploaded++;
+				} catch (error) {
+					console.error(`XWiki Publisher: failed to upload ${name}`, error);
+					failed.push(name);
+				}
+			}
+		}
+
+		const url = client.viewUrl(location);
+		if (this.settings.writeUrlToFrontmatter) {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
+				frontmatter[FM_URL] = url;
+			});
+		}
+		// Attachment uploads create page versions too, so read the version once everything is saved.
+		const saved = await client.getPage(location);
+		if (saved) await this.sync.recordSync(file, saved.version);
+		return { outcome: created ? "created" : "updated", uploaded, failed };
+	}
+
+	/**
+	 * Notes published by a folder publish: every Markdown note in the folder and its subfolders, plus the folder's
+	 * own folder note when it is stored next to the folder. Conflict copies written by sync are left out.
+	 * Notes are ordered from the outermost page inwards, so folder notes are published before the pages below them.
+	 */
+	private notesToPublish(folder: TFolder): TFile[] {
+		const files: TFile[] = [];
+		const collect = (item: TAbstractFile) => {
+			if (item instanceof TFolder) item.children.forEach(collect);
+			else if (item instanceof TFile && item.extension === "md") files.push(item);
+		};
+		collect(folder);
+		const own = folder.isRoot() ? null : this.folderNotes.noteOf(folder.path);
+		if (own && !files.includes(own)) files.push(own);
+		const depth = new Map(
+			files.filter((file) => !file.basename.endsWith(" (XWiki conflict)")).map((file) => [file, pageChain(this.locate(file)).length]),
+		);
+		return [...depth.keys()].sort((a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0) || a.path.localeCompare(b.path));
+	}
+
+	/** Publishes a vault folder with its subfolders and notes; asks for the folder when it is not given. */
+	async publishFolder(folder?: TFolder | string): Promise<void> {
+		if (typeof folder === "string") {
+			const path = normalizePath(folder.trim());
+			const found = path === "/" ? this.app.vault.getRoot() : this.app.vault.getFolderByPath(path);
+			if (!found) {
+				this.report(`"${folder.trim()}" is not a folder of this vault.`, true);
+				return;
+			}
+			folder = found;
+		}
+		folder ??= (await chooseFolder(this.app, "Folder to publish to XWiki")) ?? undefined;
+		if (!folder) return;
+		const name = folder.isRoot() ? "the vault" : folder.path;
+		const files = this.notesToPublish(folder);
+		if (files.length === 0) {
+			this.report(`There are no notes in "${name}" to publish.`, true);
+			return;
+		}
+		if (this.busy) {
+			new Notice(`XWiki Publisher is busy: ${this.busy}`);
+			return;
+		}
+		const mode = await choose<OverwriteMode | null>(
+			this.app,
+			"Publish folder to XWiki",
+			`Publish ${files.length} note(s) from "${name}" and its subfolders to XWiki? Notes already in sync with their page are skipped. ` +
+				"Pages changed on XWiki since the last sync, or not written in Markdown, are skipped too, unless you choose to overwrite them.",
+			[
+				{ label: "Publish", value: "skip", cta: true },
+				{ label: "Publish and overwrite", value: "overwrite", warning: true },
+				{ label: "Cancel", value: null },
+			],
+		);
+		if (!mode) return;
+		await this.exclusive(`publishing "${name}"`, () => this.doPublishFolder(name, files, mode));
+	}
+
+	private async doPublishFolder(name: string, files: TFile[], mode: OverwriteMode): Promise<void> {
+		const client = this.clientOrNotice();
+		if (!client) return;
+		const notice = new Notice(`Publishing "${name}" to XWiki…`, 0);
+		const counts = { created: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, cancelled: 0 };
+		const skipped: string[] = [];
+		// Notes that failed, grouped by error message: a missing right or a bad token fails every note the same way.
+		const failures = new Map<string, string[]>();
+		const attachmentFailures: string[] = [];
+		const status = (message: string) => {
+			notice.setMessage(message);
+			this.progress(message);
+		};
+		try {
+			this.cancellable = true;
+			await this.ensureSyntaxAvailable(client, this.settings.syntax);
+			const knownPages = new Set<string>();
+			await this.sync.batch(async () => {
+				for (const [i, file] of files.entries()) {
+					if (this.cancelRequested) {
+						counts.cancelled = files.length - i;
+						break;
+					}
+					status(`Publishing ${i + 1}/${files.length}: ${file.basename}`);
+					try {
+						const result = await this.publishNote(client, file, { mode, status, skipUnchanged: true, knownPages });
+						counts[result.outcome]++;
+						if (result.reason) skipped.push(`${file.basename} (${result.reason})`);
+						attachmentFailures.push(...result.failed.map((attachment) => `${file.basename}/${attachment}`));
+					} catch (error) {
+						console.error(`XWiki Publisher: failed to publish ${file.path}`, error);
+						counts.failed++;
+						const message = errorMessage(error);
+						failures.set(message, [...(failures.get(message) ?? []), file.basename]);
+					}
+				}
+			});
+			notice.hide();
+			const parts = [
+				`${counts.created} created`,
+				`${counts.updated} updated`,
+				`${counts.unchanged} unchanged`,
+				counts.skipped > 0 ? `${counts.skipped} skipped: ${skipped.join(", ")}` : "",
+				counts.failed > 0
+					? `${counts.failed} failed: ${[...failures].map(([message, names]) => `${names.join(", ")}: ${message}`).join("; ")}`
+					: "",
+				attachmentFailures.length > 0 ? `attachments not uploaded: ${attachmentFailures.join(", ")}` : "",
+				counts.cancelled > 0 ? `${counts.cancelled} not processed (cancelled)` : "",
+			].filter(Boolean);
+			this.report(
+				`XWiki publish of "${name}" finished: ${parts.join("; ")}.`,
+				counts.skipped > 0 || counts.failed > 0 || attachmentFailures.length > 0,
+				10000,
+			);
+		} catch (error) {
+			notice.hide();
+			console.error("XWiki Publisher: folder publish failed", error);
 			this.report(`Publishing to XWiki failed: ${errorMessage(error)}`, true);
 		}
 	}

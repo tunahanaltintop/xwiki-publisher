@@ -125,7 +125,7 @@ export class SyncService {
 	}
 
 	/** Runs `task` with saving deferred; saves once at the end, also when the task fails or is cancelled. */
-	private async batch<T>(task: () => Promise<T>): Promise<T> {
+	async batch<T>(task: () => Promise<T>): Promise<T> {
 		this.batchDepth++;
 		try {
 			return await task();

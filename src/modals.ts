@@ -1,4 +1,4 @@
-import { App, Modal, Setting } from "obsidian";
+import { App, FuzzySuggestModal, Modal, Setting, TFolder } from "obsidian";
 
 export interface Choice<T> {
 	label: string;
@@ -56,6 +56,28 @@ export function prompt(app: App, title: string, description: string, placeholder
 			});
 		new Setting(modal.contentEl).addButton((button) => button.setButtonText("OK").setCta().onClick(submit));
 		modal.onClose = () => resolve(result);
+		modal.open();
+	});
+}
+
+/** Asks the user to pick a vault folder; resolves to `null` when dismissed. */
+export function chooseFolder(app: App, placeholder: string): Promise<TFolder | null> {
+	return new Promise((resolve) => {
+		let result: TFolder | null = null;
+		const modal = new (class extends FuzzySuggestModal<TFolder> {
+			getItems(): TFolder[] {
+				return app.vault.getAllFolders(false);
+			}
+			getItemText(folder: TFolder): string {
+				return folder.path;
+			}
+			onChooseItem(folder: TFolder): void {
+				result = folder;
+			}
+		})(app);
+		modal.setPlaceholder(placeholder);
+		// onChooseItem runs after onClose, so resolve once the current event has been handled.
+		modal.onClose = () => window.setTimeout(() => resolve(result), 0);
 		modal.open();
 	});
 }

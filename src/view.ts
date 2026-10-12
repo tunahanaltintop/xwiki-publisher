@@ -10,6 +10,7 @@ export class XWikiPanelView extends ItemView {
 	private file: TFile | null = null;
 	private importInput = "";
 	private spaceInput: string;
+	private folderInput = "";
 	private connectionText = "";
 	private remoteText: { path: string; text: string } | null = null;
 	private renderPending = false;
@@ -107,6 +108,7 @@ export class XWikiPanelView extends ItemView {
 
 		this.renderConnection(el);
 		this.renderNote(el);
+		this.renderPublishFolder(el);
 		this.renderImport(el);
 		this.renderSync(el);
 		this.renderActivity(el);
@@ -233,6 +235,21 @@ export class XWikiPanelView extends ItemView {
 		field("XWiki space", FM_SPACE, location.spaces.slice(0, location.page === "WebHome" ? -1 : undefined).join(".") || "Main", "Overrides the default space and folders for this note.");
 		field("Page name", FM_PAGE, pageDisplayName(location), "Defaults to the note name.");
 		field("Page title", FM_TITLE, file.basename, "Title shown on XWiki.");
+	}
+
+	private renderPublishFolder(el: HTMLElement): void {
+		new Setting(el).setName("Publish folder").setHeading();
+		const setting = new Setting(el).setClass("xwiki-panel-field").addText((text) =>
+			text
+				.setPlaceholder("Vault folder path")
+				.setValue(this.folderInput)
+				.onChange((value) => (this.folderInput = value)),
+		);
+		this.button(setting, "Publish", () => this.plugin.publishFolder(this.folderInput.trim() || undefined));
+		el.createDiv({
+			cls: "xwiki-panel-hint",
+			text: "Publishes every note in the folder and its subfolders. Leave the field empty to choose the folder.",
+		});
 	}
 
 	private renderImport(el: HTMLElement): void {
