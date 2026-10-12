@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - Publish a whole folder: the **Publish folder to XWiki** command, the folder menu item and the panel's *Publish folder* section publish every note in a folder and its subfolders, folder notes first. Notes in sync with their page are skipped; pages changed on XWiki or not written in Markdown are skipped unless you choose to overwrite them. The publish shows its progress and can be cancelled; notes that fail are listed with the error XWiki returned.
 
