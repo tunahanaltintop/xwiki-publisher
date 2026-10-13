@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.0
+
+- The side panel has two tabs. **XWiki** holds the existing actions; **Source control** lists every note added (green **A**) or modified (orange **M**) since its last publish or pull, as a flat list or, with the *Folder view* button, as a tree below their folders, where a folder note is shown as its folder, like in the file explorer. Selecting a row opens the note. Notes are selected with checkboxes, one by one, by folder in the folder view, or all at once with *Select all*, and **Publish** publishes the selection with the same rules as a folder publish. The recent activity list is shown on both tabs.
+
 ## 1.3.0
 
 - Publish a whole folder: the **Publish folder to XWiki** command, the folder menu item and the panel's *Publish folder* section publish every note in a folder and its subfolders, folder notes first. Notes in sync with their page are skipped; pages changed on XWiki or not written in Markdown are skipped unless you choose to overwrite them. The publish shows its progress and can be cancelled; notes that fail are listed with the error XWiki returned.
