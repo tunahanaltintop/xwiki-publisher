@@ -21,8 +21,8 @@ XWiki tarafında yapılması gerekenler ayrı bir belgededir: [XWIKI_SETUP.md](X
 | --- | --- |
 | Dizin sayfası | https://community.obsidian.md/plugins/xwiki-publisher |
 | Depo | https://github.com/tunahanaltintop/xwiki-publisher (herkese açık, MIT) |
-| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0`, `1.2.1`, `1.3.0`, `1.4.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
-| Son sürümler | `1.3.0`: klasör yayınlama; `1.4.0`: paneldeki *Source control* sekmesi ve seçili değişikliklerin toplu yayınlanması |
+| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0`, `1.2.1`, `1.3.0`, `1.4.0`, `1.4.1` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
+| Son sürümler | `1.3.0`: klasör yayınlama; `1.4.0`: paneldeki *Source control* sekmesi ve seçili değişikliklerin toplu yayınlanması; `1.4.1`: CSS uyumluluk düzeltmesi |
 | Otomatik inceleme | Hata ve uyarı yok; `1.1.0` ile son tavsiyeler de giderildi (bkz. §8). |
 
 İlk gönderim tamamlandı; §0–§7 o sürecin kaydıdır. Yeni bir sürüm için yalnızca **§9 Yeni sürüm yayınlama** adımları
@@ -273,6 +273,7 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Sürüm | Bölüm | Bulgu | Yapılan |
 | --- | --- | --- | --- |
 | 1.2.0 | CSS lint | Warning: `text-decoration` kısaltması eski Obsidian sürümlerinde kısmen destekleniyor (`styles.css`) | 1.2.1'de giderildi: işaret `border-bottom` ile çiziliyor. |
+| 1.4.0 | CSS lint | Warning: `text-decoration` kısaltması eski Obsidian sürümlerinde kısmen destekleniyor (`styles.css`, *Source control* sekmesindeki klasör notu işareti) | 1.4.1'de giderildi: işaret `border-bottom` ile çiziliyor. Yeni CSS'te `text-decoration` kullanmayın. |
 | 1.4.0 | Behavior | Beklenen: *Vault Enumeration* tavsiyesi yeniden çıkabilir. *Source control* sekmesi, hiç yayınlanmamış notları bulmak için `getMarkdownFiles()` ile vault'u listeliyor. | Bilinçli bir tercih: listeleme yalnızca sekme açıkken yapılıyor ve içerik yalnızca senkronize edilmiş notlar için okunuyor; README → *Privacy* bölümünde açıklandı. Tavsiye çıkarsa bu tabloya sonucu yazın. |
 
 ### İlk gönderimin inceleme sonucu (1.0.0)

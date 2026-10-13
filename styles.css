@@ -246,6 +246,5 @@
 
 /* Folders with a folder note open it, like in the file explorer; the arrow expands and collapses them. */
 .xwiki-change-folder.xwiki-has-note .xwiki-change-name {
-	text-decoration: underline dotted var(--text-faint);
-	text-underline-offset: 3px;
+	border-bottom: 1px dotted var(--text-faint);
 }
