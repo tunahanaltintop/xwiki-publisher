@@ -38,6 +38,12 @@ interface NotePublishResult {
 	failed: string[];
 }
 
+/** A note with local changes to publish: never synced with XWiki (`added`), or edited since its last sync (`modified`). */
+export interface NoteChange {
+	file: TFile;
+	status: "added" | "modified";
+}
+
 export interface ActivityEntry {
 	time: number;
 	message: string;
@@ -46,6 +52,11 @@ export interface ActivityEntry {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/** Copies of a page that sync writes next to a note when both changed; they are never published. */
+function isConflictCopy(file: TFile): boolean {
+	return file.basename.endsWith(" (XWiki conflict)");
 }
 
 export default class XWikiPublisherPlugin extends Plugin {
@@ -239,6 +250,20 @@ export default class XWikiPublisherPlugin extends Plugin {
 		const record = this.syncState[file.path];
 		if (!record) return { synced: false, localChanges: false };
 		return { synced: true, version: record.version, localChanges: this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file)) };
+	}
+
+	/**
+	 * Notes of the vault that publishing would change on XWiki: never synced, or edited since their last sync.
+	 * Only notes with a sync record are read, to compare them with their fingerprint. Ordered by path.
+	 */
+	async localChanges(): Promise<NoteChange[]> {
+		const changes: NoteChange[] = [];
+		for (const file of this.app.vault.getMarkdownFiles()) {
+			if (isConflictCopy(file)) continue;
+			if (!this.syncState[file.path]) changes.push({ file, status: "added" });
+			else if (this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file))) changes.push({ file, status: "modified" });
+		}
+		return changes.sort((a, b) => a.file.path.localeCompare(b.file.path));
 	}
 
 	/** Compares the note's last synced version with the page on XWiki. */
@@ -563,9 +588,12 @@ export default class XWikiPublisherPlugin extends Plugin {
 		collect(folder);
 		const own = folder.isRoot() ? null : this.folderNotes.noteOf(folder.path);
 		if (own && !files.includes(own)) files.push(own);
-		const depth = new Map(
-			files.filter((file) => !file.basename.endsWith(" (XWiki conflict)")).map((file) => [file, pageChain(this.locate(file)).length]),
-		);
+		return this.publishOrder(files);
+	}
+
+	/** Orders notes from the outermost page inwards, so folder notes are published before the pages below them. */
+	private publishOrder(files: TFile[]): TFile[] {
+		const depth = new Map(files.filter((file) => !isConflictCopy(file)).map((file) => [file, pageChain(this.locate(file)).length]));
 		return [...depth.keys()].sort((a, b) => (depth.get(a) ?? 0) - (depth.get(b) ?? 0) || a.path.localeCompare(b.path));
 	}
 
@@ -588,14 +616,27 @@ export default class XWikiPublisherPlugin extends Plugin {
 			this.report(`There are no notes in "${name}" to publish.`, true);
 			return;
 		}
+		await this.publishMany(files, `"${name}"`, "Publish folder to XWiki", `Publish ${files.length} note(s) from "${name}" and its subfolders to XWiki?`);
+	}
+
+	/** Publishes the notes selected in the panel's source control tab, with the same rules as a folder publish. */
+	async publishNotes(files: TFile[]): Promise<void> {
+		const ordered = this.publishOrder(files);
+		if (ordered.length === 0) return;
+		const label = ordered.length === 1 ? `"${ordered[0].basename}"` : `${ordered.length} selected notes`;
+		await this.publishMany(ordered, label, "Publish to XWiki", `Publish ${label} to XWiki?`);
+	}
+
+	/** Asks how to treat pages changed on XWiki, then publishes `files` in order; `label` names them in messages. */
+	private async publishMany(files: TFile[], label: string, title: string, question: string): Promise<void> {
 		if (this.busy) {
 			new Notice(`XWiki Publisher is busy: ${this.busy}`);
 			return;
 		}
 		const mode = await choose<OverwriteMode | null>(
 			this.app,
-			"Publish folder to XWiki",
-			`Publish ${files.length} note(s) from "${name}" and its subfolders to XWiki? Notes already in sync with their page are skipped. ` +
+			title,
+			`${question} Notes already in sync with their page are skipped. ` +
 				"Pages changed on XWiki since the last sync, or not written in Markdown, are skipped too, unless you choose to overwrite them.",
 			[
 				{ label: "Publish", value: "skip", cta: true },
@@ -604,13 +645,13 @@ export default class XWikiPublisherPlugin extends Plugin {
 			],
 		);
 		if (!mode) return;
-		await this.exclusive(`publishing "${name}"`, () => this.doPublishFolder(name, files, mode));
+		await this.exclusive(`publishing ${label}`, () => this.doPublishMany(label, files, mode));
 	}
 
-	private async doPublishFolder(name: string, files: TFile[], mode: OverwriteMode): Promise<void> {
+	private async doPublishMany(label: string, files: TFile[], mode: OverwriteMode): Promise<void> {
 		const client = this.clientOrNotice();
 		if (!client) return;
-		const notice = new Notice(`Publishing "${name}" to XWiki…`, 0);
+		const notice = new Notice(`Publishing ${label} to XWiki…`, 0);
 		const counts = { created: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, cancelled: 0 };
 		const skipped: string[] = [];
 		// Notes that failed, grouped by error message: a missing right or a bad token fails every note the same way.
@@ -657,7 +698,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 				counts.cancelled > 0 ? `${counts.cancelled} not processed (cancelled)` : "",
 			].filter(Boolean);
 			this.report(
-				`XWiki publish of "${name}" finished: ${parts.join("; ")}.`,
+				`XWiki publish of ${label} finished: ${parts.join("; ")}.`,
 				counts.skipped > 0 || counts.failed > 0 || attachmentFailures.length > 0,
 				10000,
 			);

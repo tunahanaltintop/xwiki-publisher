@@ -21,8 +21,8 @@ XWiki tarafında yapılması gerekenler ayrı bir belgededir: [XWIKI_SETUP.md](X
 | --- | --- |
 | Dizin sayfası | https://community.obsidian.md/plugins/xwiki-publisher |
 | Depo | https://github.com/tunahanaltintop/xwiki-publisher (herkese açık, MIT) |
-| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
-| Son sürümler | `1.2.0`: dahili klasör notları; `1.2.1`: CSS uyumluluk düzeltmesi |
+| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0`, `1.2.1`, `1.3.0`, `1.4.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
+| Son sürümler | `1.3.0`: klasör yayınlama; `1.4.0`: paneldeki *Source control* sekmesi ve seçili değişikliklerin toplu yayınlanması |
 | Otomatik inceleme | Hata ve uyarı yok; `1.1.0` ile son tavsiyeler de giderildi (bkz. §8). |
 
 İlk gönderim tamamlandı; §0–§7 o sürecin kaydıdır. Yeni bir sürüm için yalnızca **§9 Yeni sürüm yayınlama** adımları
@@ -273,6 +273,7 @@ Tarayıcı şu dosya ve klasörleri yok sayar, bu yüzden testler ve araç betik
 | Sürüm | Bölüm | Bulgu | Yapılan |
 | --- | --- | --- | --- |
 | 1.2.0 | CSS lint | Warning: `text-decoration` kısaltması eski Obsidian sürümlerinde kısmen destekleniyor (`styles.css`) | 1.2.1'de giderildi: işaret `border-bottom` ile çiziliyor. |
+| 1.4.0 | Behavior | Beklenen: *Vault Enumeration* tavsiyesi yeniden çıkabilir. *Source control* sekmesi, hiç yayınlanmamış notları bulmak için `getMarkdownFiles()` ile vault'u listeliyor. | Bilinçli bir tercih: listeleme yalnızca sekme açıkken yapılıyor ve içerik yalnızca senkronize edilmiş notlar için okunuyor; README → *Privacy* bölümünde açıklandı. Tavsiye çıkarsa bu tabloya sonucu yazın. |
 
 ### İlk gönderimin inceleme sonucu (1.0.0)
 
@@ -344,3 +345,7 @@ kullanmayın):
 | 17 | Çekilmiş bir notu başka bir klasöre taşı, XWiki'de sayfayı değiştir, tekrar sync | Not taşıdığınız yerde kalır ve güncellenir; boşalan klasörünüz silinmez. |
 | 18 | Çekilmiş bir nota etiket (property) ekle, XWiki'de sayfayı değiştir, tekrar sync | Çakışma kopyası oluşmaz; not güncellenir, etiket korunur. |
 | 19 | Mobil emülasyon (`this.app.emulateMobile(true)` geliştirici konsolunda) | Panel ve komutlar çalışır. |
+| 20 | Panelde **Source control** sekmesini aç; yeni bir not oluştur, senkronize edilmiş bir notun gövdesini değiştir | Yeni not yeşil **A**, değişen not turuncu **M** ile listelenir; yalnızca property değişikliği listeye girmez. |
+| 21 | **Folder view** düğmesini aç/kapat; Obsidian'ı yeniden başlat | Ağaç ve düz liste arasında geçilir; tercih ve seçili sekme korunur. |
+| 22 | Klasör görünümünde klasör notu olan bir klasörün notunu değiştir | Not ayrı satır olarak çıkmaz; harf klasör satırında görünür, klasör adına tıklayınca not açılır, ok klasörü açıp kapatır. |
+| 23 | Klasör checkbox'ı ve **Select all** ile seçim yapıp **Publish** | Seçim alt notlara uygulanır, kısmi seçimde yarım işaret görünür; klasör yayınlamadaki onay ve atlama kuralları geçerlidir, yayınlanan notlar listeden çıkar, sonuç *Recent activity* listesinde iki sekmede de görünür. |

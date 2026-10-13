@@ -21,6 +21,8 @@ they keep their Markdown source and can travel both ways.
 - **Built-in folder notes**: XWiki pages that have children become folder notes, and selecting a folder in the file
   explorer shows the parent page's content. No other plugin is needed.
 - A **side panel** with every action, the note's target page, its sync state and recent activity.
+- A **Source control** tab that lists every note added or modified since its last sync, as a list or a folder tree,
+  and **publishes the selected notes** in one go.
 - The access token is kept in Obsidian's **secret storage**, never in the plugin's data file.
 
 ## Requirements
@@ -53,21 +55,57 @@ The XWiki administrator checklist, with commands to verify each point, is in
 
 ## Usage
 
-Open the side panel with the **Open XWiki panel** ribbon icon or the **XWiki Publisher: Open panel** command. It
-shows, for the current note, the XWiki page it maps to, whether it is in sync, and buttons for every action.
+Open the side panel with the **Open XWiki panel** ribbon icon or the **XWiki Publisher: Open panel** command. It has
+two tabs:
+
+- **XWiki** shows, for the current note, the XWiki page it maps to, whether it is in sync, and buttons for every
+  action.
+- **Source control** lists the notes with local changes and publishes a selection of them; see
+  [Source control](#source-control).
 
 | Action | Where | What it does |
 | --- | --- | --- |
 | Publish current note | Panel, command palette, file menu | Creates or updates the note's XWiki page and uploads its attachments. |
 | Publish folder to XWiki | Panel, command palette, folder menu | Publishes every note in a folder and its subfolders, folder notes first. |
+| Publish selected changes | Panel, *Source control* tab | Publishes the notes checked in the list of local changes. |
 | Pull current note from XWiki | Panel, command palette, file menu | Updates the note from its XWiki page. |
 | Check XWiki | Panel | Tells whether the page changed on XWiki since the last sync. |
 | Import page from XWiki | Panel, command palette | Imports one page given by URL or reference (`Space.Page`). |
 | Sync space from XWiki | Panel, command palette | Pulls a page and every page below it, given by URL or space reference. |
 | Open published page in browser | Panel, command palette | Opens the page saved in the note's `xwiki-url` property. |
 
-Only one XWiki operation runs at a time. A running space sync or folder publish shows its progress in the panel and can
-be cancelled.
+Only one XWiki operation runs at a time. A running space sync or folder publish (or a publish of selected changes)
+shows its progress in the panel and can be cancelled.
+
+### Source control
+
+The **Source control** tab of the panel lists, under **Changes**, every note of the vault that publishing would
+change on XWiki. The letter at the right of each row tells why:
+
+| Letter | Meaning |
+| --- | --- |
+| **A** (green) | Added: the note was never published or pulled. |
+| **M** (orange) | Modified: the note's body changed since its last publish or pull. |
+
+Editing only a note's properties is not a change, the same rule as for [conflicts](#conflicts). Conflict copies
+(`<Note> (XWiki conflict).md`) are not listed. The list updates as notes are created, edited, renamed, deleted,
+published or pulled; the **Refresh** button scans the vault again.
+
+- **Folder view** (the folder tree button at the top) switches between a flat list, where each note shows its folder
+  next to its name, and a tree of the notes below their folders. The choice is kept when Obsidian restarts.
+- In the folder view, a [folder note](#folder-notes) is shown as its folder, like in the file explorer: a changed folder
+  note puts its letter on the folder's row instead of a row of its own, selecting a folder that has a folder note
+  opens the note (its name is underlined), and the arrow expands and collapses the folder. Folders without a folder
+  note, and **Changes**, expand and collapse when selected.
+- Select a row to open its note; with Ctrl/Cmd it opens in a new tab.
+- The **checkbox** at the left of a row selects the note for publishing. In the folder view, a folder's checkbox
+  selects or clears every changed note below it, and shows a partial mark when only some are selected.
+- **Select all** at the top selects or clears every listed change.
+- **Publish** publishes the selected notes, with the same rules as a [folder publish](#conflicts): you choose between
+  *Publish* and *Publish and overwrite*, notes are published from the outermost page inwards (folder notes first), notes
+  in sync with their page are skipped, and pages changed on XWiki or not written in Markdown are skipped unless you
+  choose to overwrite them. The result lists every skipped or failed note. Published notes leave the list.
+- **Recent activity** below the list shows the results of the latest operations, the same list as on the *XWiki* tab.
 
 ### Where a note is published
 
@@ -181,8 +219,9 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
 - **Pull**: when the note and the page both changed, you choose between *Keep both* and *Overwrite local note*.
   **Sync** keeps your note and writes the XWiki version next to it as `<Note> (XWiki conflict).md`.
 - **Publish**: when the page changed on XWiki since the last sync, you are asked before it is overwritten.
-- **Publish folder**: notes in sync with their page are skipped. Pages changed on XWiki since the last sync, or not
-  written in Markdown, are skipped and listed in the result, unless you choose *Publish and overwrite*.
+- **Publish folder** and **Publish** in the *Source control* tab: notes in sync with their page are skipped. Pages
+  changed on XWiki since the last sync, or not written in Markdown, are skipped and listed in the result, unless you
+  choose *Publish and overwrite*.
 
 ### Note properties
 
@@ -246,8 +285,10 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
   downloads the pages you pull with their attachments.
 - **Account**: an XWiki account and an access token for it are required.
 - **No telemetry**: the plugin collects no usage data and contacts no other service.
-- **Files**: the plugin only reads and writes files inside your vault. It never lists the vault's files: it only
-  opens notes it published or pulled, the notes you act on, and the files they link to.
+- **Files**: the plugin only reads and writes files inside your vault. It opens notes it published or pulled, the
+  notes you act on, and the files they link to. While the panel's *Source control* tab is open, it lists the vault's
+  Markdown notes to find the ones never published, and reads the notes it published or pulled to detect edits;
+  nothing leaves the vault until you publish.
 - **Token**: stored in Obsidian's secret storage and sent only to the configured XWiki URL. Use HTTPS; with plain
   HTTP the token travels unencrypted, and the plugin warns about it.
 
