@@ -14,6 +14,8 @@ import {
 } from "./location";
 import { choose, chooseFolder, prompt } from "./modals";
 import { FolderNotes } from "./folder-notes";
+import { describeLinks, failedReport, LinkReport, syncPageLinks, workPackagesIn } from "./openproject";
+import { OpenProjectClient } from "./openproject-client";
 import { DEFAULT_SETTINGS, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
 import { AttachmentPaths, AttachmentVersions, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
@@ -36,6 +38,8 @@ interface NotePublishResult {
 	uploaded: number;
 	/** Attachments that could not be uploaded. */
 	failed: string[];
+	/** What changed in OpenProject; `null` when the page has no work package links or OpenProject is not set up. */
+	links: LinkReport | null;
 }
 
 /** A note with local changes to publish: never synced with XWiki (`added`), or edited since its last sync (`modified`). */
@@ -200,8 +204,13 @@ export default class XWikiPublisherPlugin extends Plugin {
 	/** Shows a result to the user and keeps it in the panel's activity list. */
 	report(message: string, error = false, timeout?: number): void {
 		new Notice(message, timeout);
+		this.log(message, error);
+	}
+
+	/** Adds a line to the panel's activity list without a notice, for details of an operation on many notes. */
+	private log(message: string, error = false): void {
 		this.activity.unshift({ time: Date.now(), message, error });
-		this.activity.length = Math.min(this.activity.length, 20);
+		this.activity.length = Math.min(this.activity.length, 100);
 		this.changed();
 	}
 
@@ -385,6 +394,50 @@ export default class XWikiPublisherPlugin extends Plugin {
 		});
 	}
 
+	createOpenProjectClient(): OpenProjectClient {
+		const baseUrl = this.settings.openProjectUrl;
+		if (!baseUrl) throw new Error("Set the OpenProject URL in the plugin settings.");
+		if (!/^https?:\/\//i.test(baseUrl)) throw new Error("The OpenProject URL must start with https://.");
+		const token = this.settings.openProjectTokenSecretId ? this.app.secretStorage.getSecret(this.settings.openProjectTokenSecretId) : null;
+		if (!token) throw new Error("Select an OpenProject token in the plugin settings.");
+		return new OpenProjectClient({ baseUrl, token });
+	}
+
+	/** Checks the OpenProject token and whether pages of the configured XWiki can be linked; returns a message for the user. */
+	async testOpenProject(): Promise<string> {
+		const openProject = this.createOpenProjectClient();
+		let message = `Connected to OpenProject as ${await openProject.testConnection()}.`;
+		if (/^http:\/\//i.test(this.settings.openProjectUrl)) message += " Warning: the URL uses plain HTTP, so the token is sent unencrypted. Use HTTPS.";
+		try {
+			await openProject.checkWikiProvider(await this.createClient().getOpenProjectInstanceId());
+			return `${message} XWiki is one of its wiki providers, so published pages can be linked.`;
+		} catch (error) {
+			return `${message} Published pages cannot be linked yet: ${errorMessage(error)}`;
+		}
+	}
+
+	/**
+	 * Makes the work packages linked from a page follow its links, comparing them with the links of the page before
+	 * this publish. The page is already saved, so a failure here is reported and does not fail the publish.
+	 */
+	private async syncWorkPackageLinks(client: XWikiClient, location: PageLocation, previousPage: string, page: string, status: (message: string) => void): Promise<LinkReport | null> {
+		const baseUrl = this.settings.openProjectUrl;
+		if (!baseUrl) return null;
+		const previous = workPackagesIn(previousPage, baseUrl);
+		const current = workPackagesIn(page, baseUrl);
+		if (previous.length === 0 && current.length === 0) return null;
+		status("Updating OpenProject links…");
+		try {
+			const openProject = this.createOpenProjectClient();
+			const provider = await client.getOpenProjectInstanceId();
+			const identifier = await client.getOpenProjectPageId(location);
+			return await syncPageLinks(openProject, { provider, identifier }, previous, current);
+		} catch (error) {
+			console.error("XWiki Publisher: could not update the OpenProject links", error);
+			return failedReport(previous, current, errorMessage(error));
+		}
+	}
+
 	/** Creates the client, or shows why it cannot be created. */
 	private clientOrNotice(): XWikiClient | null {
 		try {
@@ -495,6 +548,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 			if (result.uploaded > 0) message += ` ${result.uploaded} attachment(s) uploaded.`;
 			if (result.failed.length > 0) message += ` Failed to upload: ${result.failed.join(", ")}.`;
 			this.report(message, result.failed.length > 0);
+			if (result.links) this.report(describeLinks(file.basename, result.links), result.links.failed.length > 0, 10000);
 		} catch (error) {
 			notice.hide();
 			console.error("XWiki Publisher: publish failed", error);
@@ -531,10 +585,11 @@ export default class XWikiPublisherPlugin extends Plugin {
 		const remote = await client.getPage(location);
 		if (options.skipUnchanged && remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content)) {
 			options.knownPages?.add(serializeReference(location));
-			return { outcome: "unchanged", uploaded: 0, failed: [] };
+			// The page stays as it is, but its work packages may not be linked yet: OpenProject may have been set up since.
+			return { outcome: "unchanged", uploaded: 0, failed: [], links: await this.syncWorkPackageLinks(client, location, remote.content, markdown, options.status) };
 		}
 		const blocker = await this.overwriteBlocker(file, location, remote, options.mode);
-		if (blocker) return { outcome: "skipped", reason: blocker, uploaded: 0, failed: [] };
+		if (blocker) return { outcome: "skipped", reason: blocker, uploaded: 0, failed: [], links: null };
 
 		await this.ensureFolderPages(client, file, options.knownPages);
 		const created = await client.putPage(location, {
@@ -571,7 +626,8 @@ export default class XWikiPublisherPlugin extends Plugin {
 		// Attachment uploads create page versions too, so read the version once everything is saved.
 		const saved = await client.getPage(location);
 		if (saved) await this.sync.recordSync(file, saved.version);
-		return { outcome: created ? "created" : "updated", uploaded, failed };
+		const links = await this.syncWorkPackageLinks(client, location, remote?.content ?? "", markdown, options.status);
+		return { outcome: created ? "created" : "updated", uploaded, failed, links };
 	}
 
 	/**
@@ -657,6 +713,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 		// Notes that failed, grouped by error message: a missing right or a bad token fails every note the same way.
 		const failures = new Map<string, string[]>();
 		const attachmentFailures: string[] = [];
+		const linkCounts = { linked: 0, existing: 0, removed: 0, failed: 0 };
 		const status = (message: string) => {
 			notice.setMessage(message);
 			this.progress(message);
@@ -677,6 +734,13 @@ export default class XWikiPublisherPlugin extends Plugin {
 						counts[result.outcome]++;
 						if (result.reason) skipped.push(`${file.basename} (${result.reason})`);
 						attachmentFailures.push(...result.failed.map((attachment) => `${file.basename}/${attachment}`));
+						if (result.links) {
+							linkCounts.linked += result.links.linked.length;
+							linkCounts.existing += result.links.existing.length;
+							linkCounts.removed += result.links.removed.length;
+							linkCounts.failed += result.links.failed.length;
+							this.log(describeLinks(file.basename, result.links), result.links.failed.length > 0);
+						}
 					} catch (error) {
 						console.error(`XWiki Publisher: failed to publish ${file.path}`, error);
 						counts.failed++;
@@ -695,11 +759,14 @@ export default class XWikiPublisherPlugin extends Plugin {
 					? `${counts.failed} failed: ${[...failures].map(([message, names]) => `${names.join(", ")}: ${message}`).join("; ")}`
 					: "",
 				attachmentFailures.length > 0 ? `attachments not uploaded: ${attachmentFailures.join(", ")}` : "",
+				linkCounts.linked + linkCounts.existing + linkCounts.removed + linkCounts.failed > 0
+					? `OpenProject links: ${linkCounts.linked} added, ${linkCounts.existing} already linked, ${linkCounts.removed} removed, ${linkCounts.failed} failed`
+					: "",
 				counts.cancelled > 0 ? `${counts.cancelled} not processed (cancelled)` : "",
 			].filter(Boolean);
 			this.report(
 				`XWiki publish of ${label} finished: ${parts.join("; ")}.`,
-				counts.skipped > 0 || counts.failed > 0 || attachmentFailures.length > 0,
+				counts.skipped > 0 || counts.failed > 0 || attachmentFailures.length > 0 || linkCounts.failed > 0,
 				10000,
 			);
 		} catch (error) {

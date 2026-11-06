@@ -23,7 +23,9 @@ they keep their Markdown source and can travel both ways.
 - A **side panel** with every action, the note's target page, its sync state and recent activity.
 - A **Source control** tab that lists every note added or modified since its last sync, as a list or a folder tree,
   and **publishes the selected notes** in one go.
-- The access token is kept in Obsidian's **secret storage**, never in the plugin's data file.
+- **OpenProject links** (optional): published pages are linked to the work packages their notes link to, without
+  duplicates, and the link is removed when it leaves the note.
+- Access tokens are kept in Obsidian's **secret storage**, never in the plugin's data file.
 
 ## Requirements
 
@@ -36,6 +38,9 @@ they keep their Markdown source and can travel both ways.
 
 The XWiki administrator checklist, with commands to verify each point, is in
 [docs/XWIKI_SETUP.md](docs/XWIKI_SETUP.md) (Turkish).
+
+[OpenProject links](#openproject-links) are optional and have their own requirements, listed in
+[docs/OPENPROJECT_SETUP.md](docs/OPENPROJECT_SETUP.md) (Turkish): OpenProject 17.6 or later with its XWiki integration.
 
 ## Setup
 
@@ -52,6 +57,7 @@ The XWiki administrator checklist, with commands to verify each point, is in
      - **Custom header**: the raw token is sent in a header you name.
 3. Select **Test connection**. It shows the XWiki user the token authenticates as, and the Markdown syntaxes the
    server supports.
+4. Optionally, set up [OpenProject links](#openproject-links).
 
 ## Usage
 
@@ -223,6 +229,43 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
   changed on XWiki since the last sync, or not written in Markdown, are skipped and listed in the result, unless you
   choose *Publish and overwrite*.
 
+### OpenProject links
+
+Links in a note stay plain links on XWiki, so OpenProject would not know about the page. With an OpenProject set up,
+publishing also links the XWiki page to those work packages, in the **Wikis** tab of each work package, through
+[OpenProject's XWiki integration](https://www.openproject.org/docs/system-admin-guide/integrations/xwiki/). Publish,
+*Publish folder* and *Publish* in the *Source control* tab all do this.
+
+To set it up, enter the **OpenProject URL** and an **OpenProject token** (an API token from your OpenProject account
+page) in the settings, and select **Test OpenProject connection**, there or in the panel's *Connection* section. The
+token is kept in Obsidian's secret storage like the XWiki token, and sent only to that URL. Without a URL the plugin
+never contacts OpenProject. Requirements and checks are in [docs/OPENPROJECT_SETUP.md](docs/OPENPROJECT_SETUP.md).
+
+These links to the configured address count, with numeric or semantic ids such as `PROJ-123`. Links in code and in
+`%%comments%%` do not:
+
+```text
+https://openproject.example.com/work_packages/123
+https://openproject.example.com/wp/123
+https://openproject.example.com/projects/demo/work_packages/123/activity
+https://openproject.example.com/projects/demo/work_packages/details/123/overview
+```
+
+| Situation when publishing | What happens in OpenProject |
+| --- | --- |
+| The note links to a work package that is not linked to the page | The link is added. |
+| The work package is already linked to the page | Nothing: a page is never linked twice. |
+| The page on XWiki links to a work package and the note no longer does | The link is removed. |
+| A work package was linked by hand and the page never linked to it | Nothing. |
+| A note in a folder publish is in sync with its page | Its links are still checked, so existing pages get linked after setup. |
+| The page is skipped, for example because it changed on XWiki | Nothing. |
+
+Every note with work package links gets a line in **Recent activity**, for example
+`OpenProject links of "Plan": linked #12; already linked #15; removed #9`. A folder publish also adds the totals to its
+result. A failure here does not fail the publish: the page is saved, and the line names the work package and the error.
+A removal is decided from the page's content before the publish, so one that failed is not tried again: remove that link
+in OpenProject by hand.
+
 ### Note properties
 
 | Property | Set by | Meaning |
@@ -243,6 +286,10 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
 | Authentication method | Bearer token | Bearer, basic (username + token) or custom header. |
 | Username / Header name | – | Shown for the basic and custom header methods. |
 | Test connection | – | Checks the token and lists the Markdown syntaxes of the server. |
+| **OpenProject** | | |
+| OpenProject URL | – | Address of the OpenProject whose work packages get linked to published pages; empty turns this off. |
+| OpenProject token | – | Secret in Obsidian's secret storage holding the OpenProject API token. |
+| Test OpenProject connection | – | Checks the token, and that OpenProject has this XWiki as a wiki provider. |
 | **Publishing** | | |
 | Default space | `Obsidian` | Space for notes without a location of their own; dot separated for nested spaces. |
 | Mirror folder structure | On | Publish notes below the default space following their folders. |
@@ -277,20 +324,25 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
   different URL scheme are not supported.
 - Space sync lists spaces through the REST API and falls back to XWiki's search index, which is updated with a short
   delay after pages are saved.
+- OpenProject's wiki page link API is not part of its published API documentation, so an OpenProject upgrade may
+  change it. Deleting a note does not remove its OpenProject links.
 
 ## Privacy, network use and accounts
 
 - **Network use**: the plugin only talks to the XWiki server you configure, and only when you run an action (test
   connection, publish, pull, import, sync, check). It sends the notes you publish and their attachments, and
-  downloads the pages you pull with their attachments.
-- **Account**: an XWiki account and an access token for it are required.
+  downloads the pages you pull with their attachments. If you configure OpenProject, it also talks to that server,
+  when you test the connection and when you publish a note with work package links: it sends the work package numbers
+  and the page's identifier, never the note's content.
+- **Account**: an XWiki account and an access token for it are required. OpenProject links need an OpenProject account
+  and an API token for it.
 - **No telemetry**: the plugin collects no usage data and contacts no other service.
 - **Files**: the plugin only reads and writes files inside your vault. It opens notes it published or pulled, the
   notes you act on, and the files they link to. While the panel's *Source control* tab is open, it lists the vault's
   Markdown notes to find the ones never published, and reads the notes it published or pulled to detect edits;
   nothing leaves the vault until you publish.
-- **Token**: stored in Obsidian's secret storage and sent only to the configured XWiki URL. Use HTTPS; with plain
-  HTTP the token travels unencrypted, and the plugin warns about it.
+- **Tokens**: stored in Obsidian's secret storage and sent only to the XWiki or OpenProject URL they are configured
+  for. Use HTTPS; with plain HTTP a token travels unencrypted, and the plugin warns about it.
 
 ## Development
 

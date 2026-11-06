@@ -14,5 +14,6 @@ xwiki-title: Test senaryoları (özel başlık)
 | `Ekip/Ekip.md`, `Ekip/Toplantılar/…` | İkinci bir klasör ağacı |
 | `Notlar/Özel alan.md` | `xwiki-space` ile hedef alanın değiştirilmesi |
 | Bu not | `xwiki-title` ile sayfa başlığının değiştirilmesi |
+| Herhangi bir not | OpenProject linki ekleyip publish edin: bağlantı eklenir; tekrar publish edin: mükerrer eklenmez; linki silip publish edin: bağlantı kaldırılır. Sonuçlar *Recent activity* listesinde görünür. |
 
 Varsayılan XWiki alanı kurulum script'inde `ObsidianTest` olarak ayarlanır; tüm sayfalar bu alanın altına gider.

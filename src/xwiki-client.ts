@@ -1,5 +1,5 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
-import { PageLocation, parseReference, parseXWikiUrl, serializeSpaceReference, splitSpaceReference, XWikiUrl } from "./location";
+import { PageLocation, parseReference, parseXWikiUrl, serializeReference, serializeSpaceReference, splitSpaceReference, XWikiUrl } from "./location";
 import { collectSyntaxIds } from "./syntaxes";
 import { normalizeToken } from "./token";
 
@@ -360,6 +360,30 @@ export class XWikiClient {
 		// Ids may carry the wiki (`xwiki:`) prefix; translations of a page share the same reference.
 		const unique = new Set(ids.map((id) => (/^[^.:]+:/.test(id) ? id.slice(id.indexOf(":") + 1) : id)));
 		return [...unique].map(parseReference).filter((location): location is PageLocation => location !== null);
+	}
+
+	private openProjectInstance?: Promise<string>;
+
+	/** A value from the REST API of the XWiki OpenProject extension; a 404 means that the extension is missing. */
+	private async openProjectValue(path: string, key: string): Promise<string> {
+		const url = `${this.base}/rest/openproject/${path}`;
+		const response = await this.send({ url, method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		if (response.status === 404) throw new XWikiError("XWiki has no OpenProject integration API; an administrator installs the OpenProject Integration (Pro) extension.");
+		const value = ((this.json(response, url) ?? {}) as Record<string, unknown>)[key];
+		if (typeof value !== "string" && typeof value !== "number") throw new XWikiError(`XWiki's OpenProject integration did not report "${key}".`);
+		return String(value);
+	}
+
+	/** Identifier of this XWiki in OpenProject: the universal identifier of its wiki provider there. */
+	getOpenProjectInstanceId(): Promise<string> {
+		this.openProjectInstance ??= this.openProjectValue("metadata", "instanceId");
+		return this.openProjectInstance;
+	}
+
+	/** Identifier of a page in OpenProject's wiki page links; it stays the same when the page moves. */
+	getOpenProjectPageId(location: PageLocation): Promise<string> {
+		const reference = `${this.connection.wiki}:${serializeReference(location)}`;
+		return this.openProjectValue(`documents?docRef=${encodeURIComponent(reference)}`, "id");
 	}
 
 	async getAttachment(location: PageLocation, name: string): Promise<ArrayBuffer> {

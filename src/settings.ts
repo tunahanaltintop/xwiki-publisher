@@ -38,6 +38,10 @@ export interface XWikiPublisherSettings {
 	hideFolderNotes: boolean;
 	/** Renaming or moving a folder renames or moves its folder note too. */
 	renameFolderNotes: boolean;
+	/** OpenProject whose work packages get linked to published pages; empty to leave OpenProject alone. */
+	openProjectUrl: string;
+	/** ID of the secret in Obsidian's secret storage that holds the OpenProject API token. */
+	openProjectTokenSecretId: string;
 }
 
 export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
@@ -62,6 +66,8 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	openFolderNotes: true,
 	hideFolderNotes: true,
 	renameFolderNotes: true,
+	openProjectUrl: "",
+	openProjectTokenSecretId: "",
 };
 
 /** One row of the settings tab, rendered through the declarative settings API. */
@@ -199,6 +205,41 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 						name: "Test connection",
 						desc: "Checks the token and lists the Markdown syntaxes of the server.",
 						build: (setting) => setting.addButton((button) => button.setButtonText("Test").onClick(() => void this.testConnection(button))),
+					},
+				],
+			},
+			{
+				heading: "OpenProject",
+				rows: [
+					{
+						name: "OpenProject URL",
+						desc: "Published pages get linked to the work packages their notes link to at this address, and lose the link when it leaves the note. Leave empty to turn this off. Use HTTPS: the token is sent with every request.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setPlaceholder("https://openproject.example.com")
+									.setValue(settings.openProjectUrl)
+									.onChange((value) => {
+										settings.openProjectUrl = value.trim();
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "OpenProject token",
+						desc: "OpenProject API token. It is kept in Obsidian's secret storage, not in the plugin data file.",
+						build: (setting) =>
+							setting.addComponent((el) =>
+								new SecretComponent(this.app, el).setValue(settings.openProjectTokenSecretId).onChange((value) => {
+									settings.openProjectTokenSecretId = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Test OpenProject connection",
+						desc: "Checks the token, and that OpenProject knows the XWiki above as a wiki provider.",
+						build: (setting) => setting.addButton((button) => button.setButtonText("Test").onClick(() => void this.testOpenProject(button))),
 					},
 				],
 			},
@@ -425,6 +466,17 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 				],
 			},
 		];
+	}
+
+	private async testOpenProject(button: ButtonComponent): Promise<void> {
+		button.setDisabled(true);
+		try {
+			new Notice(await this.plugin.testOpenProject(), 8000);
+		} catch (error) {
+			new Notice(`OpenProject connection failed: ${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			button.setDisabled(false);
+		}
 	}
 
 	private async testConnection(button: ButtonComponent): Promise<void> {

@@ -31,6 +31,7 @@ export class XWikiPanelView extends ItemView {
 	private spaceInput: string;
 	private folderInput = "";
 	private connectionText = "";
+	private openProjectText = "";
 	private remoteText: { path: string; text: string } | null = null;
 	private renderPending = false;
 	/** Property write started from a field of the panel; actions wait for it so they use the new value. */
@@ -426,6 +427,22 @@ export class XWikiPanelView extends ItemView {
 			this.render();
 		});
 		this.button(setting, "Settings", () => this.openSettings(), { icon: "settings" });
+
+		const { openProjectUrl } = this.plugin.settings;
+		const openProject = new Setting(el)
+			.setName(openProjectUrl ? openProjectUrl.replace(/^https?:\/\//, "") : "OpenProject not configured")
+			.setDesc(this.openProjectText || (openProjectUrl ? "OpenProject: published pages are linked to their work packages." : "Set the OpenProject URL and token in the settings to link published pages to work packages."));
+		this.button(openProject, "Test", async () => {
+			this.openProjectText = "Testing…";
+			this.render();
+			try {
+				this.openProjectText = await this.plugin.testOpenProject();
+			} catch (error) {
+				this.openProjectText = error instanceof Error ? error.message : String(error);
+			}
+			this.render();
+		});
+		this.button(openProject, "Settings", () => this.openSettings(), { icon: "settings" });
 	}
 
 	private openSettings(): void {

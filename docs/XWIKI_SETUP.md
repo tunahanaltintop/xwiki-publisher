@@ -2,7 +2,8 @@
 
 Bu belge, XWiki Publisher eklentisinin çalışması için XWiki yöneticilerinin yapması gereken ayarları ve her birinin
 nasıl doğrulanacağını anlatır. Eklenti yalnızca XWiki'nin standart REST API'sini ve sayfa adreslerini kullanır;
-XWiki'ye ek bir bileşen kurmaz.
+XWiki'ye ek bir bileşen kurmaz. İsteğe bağlı OpenProject bağlantıları ise XWiki'de OpenProject entegrasyon eklentisini
+gerektirir: [OPENPROJECT_SETUP.md](OPENPROJECT_SETUP.md).
 
 > Bu belgedeki XWiki yönetim ekranı adları XWiki sürümüne göre küçük farklılıklar gösterebilir. Komutlarla yapılan
 > doğrulamalar sürümden bağımsızdır; her ayarı uygulamaya almadan önce test ortamında doğrulayın.
@@ -219,8 +220,10 @@ tamamlar. Pull sırasında bu boşluklar yeniden boş hücreye çevrilir. XWiki 
 | `GET /rest/wikis/{wiki}/query?type=solr` | Sync için yedek arama |
 | `GET /bin/view/…` | Markdown olmayan sayfaların görünümü (dönüştürme için) |
 | `GET /bin/get/…?xpage=plain` | Görünümde içerik alanı yoksa yedek |
+| `GET /rest/openproject/metadata`, `/rest/openproject/documents` | Yalnızca OpenProject ayarlıysa: sağlayıcı ve sayfa kimliği |
 
-Eklenti başka hiçbir servise bağlanmaz ve telemetri göndermez.
+Ayarlarda OpenProject adresi girilmişse eklenti o sunucuya da bağlanır
+([OPENPROJECT_SETUP.md](OPENPROJECT_SETUP.md)). Başka hiçbir servise bağlanmaz ve telemetri göndermez.
 
 ## Sorun giderme
 

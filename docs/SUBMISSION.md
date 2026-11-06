@@ -102,7 +102,7 @@ sizin yapmanız gereken bir adım var demektir.
 | Kendini veya bağımlılıklarını güncellemiyor | ✅ |
 | **README'de açıklama gerekenler** | |
 | Ağ kullanımı: hangi servis, neden | ✅ README → *Privacy, network use and accounts* |
-| Hesap gerekliliği | ✅ XWiki hesabı ve token gerektiği yazılı. |
+| Hesap gerekliliği | ✅ XWiki hesabı ve token gerektiği, isteğe bağlı OpenProject bağlantıları için OpenProject hesabı ve API token'ı gerektiği yazılı. |
 | Vault dışındaki dosyalara erişim | ✅ Yok; README'de belirtildi. |
 | Ödeme | ✅ Yok. Dizin formunda **Free** seçin. |
 | Lisans ve üçüncü taraf lisansları | ✅ Çalışma zamanında bağımlılık yok; yalnızca geliştirme araçları var. |

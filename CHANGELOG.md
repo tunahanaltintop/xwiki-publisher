@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **OpenProject links**: with an OpenProject URL and API token in the settings, publishing a note (one note, a folder or the *Source control* selection) links its XWiki page to the work packages the note links to, in their **Wikis** tab. A work package that already has the link is left alone, and when a link leaves the note its work package loses the page. Each note's result is shown in **Recent activity**, which now keeps the last 100 entries. The panel's *Connection* section and the settings can test the connection. Needs OpenProject 17.6 or later with its XWiki integration; see `docs/OPENPROJECT_SETUP.md`.
+
 ## 1.4.1
 
 - In the *Source control* tab, folders with a folder note are marked with a dotted underline drawn as a border, which every supported Obsidian version renders the same way.
