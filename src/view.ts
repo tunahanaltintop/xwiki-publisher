@@ -1,4 +1,5 @@
 import { ButtonComponent, debounce, ItemView, Keymap, setIcon, Setting, setTooltip, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { noteBasename } from "./deletions";
 import { FM_PAGE, FM_REFERENCE, FM_SPACE, FM_SYNTAX, FM_TITLE, FM_URL, folderForNote, pageDisplayName } from "./location";
 import type XWikiPublisherPlugin from "./main";
 import type { NoteChange } from "./main";
@@ -17,11 +18,20 @@ interface ChangeFolder {
 	note?: NoteChange;
 }
 
-const STATUS_LETTER: Record<NoteChange["status"], string> = { added: "A", modified: "M" };
+const STATUS_LETTER: Record<NoteChange["status"], string> = { added: "A", modified: "M", deleted: "D" };
 const STATUS_TOOLTIP: Record<NoteChange["status"], string> = {
 	added: "Added: not published to XWiki yet",
 	modified: "Modified since the last publish or pull",
+	deleted: "Deleted: publishing deletes its XWiki page",
 };
+
+function parentPath(path: string): string {
+	return path.slice(0, Math.max(path.lastIndexOf("/"), 0));
+}
+
+function changeTooltip(change: NoteChange): string {
+	return change.status === "deleted" ? `${change.path}\nXWiki page: ${change.note.reference}` : change.path;
+}
 
 /** Right sidebar panel with every XWiki Publisher action and the fields they need. */
 export class XWikiPanelView extends ItemView {
@@ -167,7 +177,7 @@ export class XWikiPanelView extends ItemView {
 		const changes = await this.plugin.localChanges();
 		if (id !== this.scanId) return;
 		this.changes = changes;
-		const paths = new Set(changes.map((change) => change.file.path));
+		const paths = new Set(changes.map((change) => change.path));
 		for (const path of [...this.selected]) if (!paths.has(path)) this.selected.delete(path);
 		this.requestRender();
 	}
@@ -247,8 +257,8 @@ export class XWikiPanelView extends ItemView {
 
 	private renderChanges(el: HTMLElement): void {
 		const changes = this.changes ?? [];
-		const paths = changes.map((change) => change.file.path);
-		const selected = changes.filter((change) => this.selected.has(change.file.path)).map((change) => change.file);
+		const paths = changes.map((change) => change.path);
+		const selected = changes.filter((change) => this.selected.has(change.path));
 
 		const toolbar = el.createDiv({ cls: "xwiki-changes-toolbar" });
 		const all = toolbar.createEl("label", { cls: "xwiki-changes-select-all" });
@@ -312,20 +322,19 @@ export class XWikiPanelView extends ItemView {
 			return folder;
 		};
 		for (const change of changes) {
-			const { file } = change;
 			// A folder note stands for its folder, as in the file explorer, wherever the layout stores it.
-			const ownFolder = this.plugin.folderNotes.isFolderNote(file) ? folderForNote(file.path, this.plugin.settings) : null;
-			if (ownFolder) folderAt(ownFolder).note = change;
-			else folderAt(file.parent && !file.parent.isRoot() ? file.parent.path : "").changes.push(change);
+			const ownFolder = folderForNote(change.path, this.plugin.settings);
+			if (ownFolder !== null && this.app.vault.getFolderByPath(ownFolder)) folderAt(ownFolder).note = change;
+			else folderAt(parentPath(change.path)).changes.push(change);
 		}
 		return root;
 	}
 
 	private notesIn(folder: ChangeFolder): string[] {
 		return [
-			...(folder.note ? [folder.note.file.path] : []),
+			...(folder.note ? [folder.note.path] : []),
 			...[...folder.folders.values()].flatMap((child) => this.notesIn(child)),
-			...folder.changes.map((change) => change.file.path),
+			...folder.changes.map((change) => change.path),
 		];
 	}
 
@@ -334,13 +343,13 @@ export class XWikiPanelView extends ItemView {
 		const folders = [...folder.folders.values()].sort((a, b) => a.name.localeCompare(b.name));
 		for (const child of folders) {
 			const row = this.changeRow(tree, depth, child.path, child.name, this.notesIn(child));
-			setTooltip(row, child.note ? child.note.file.path : child.path);
+			setTooltip(row, child.note ? changeTooltip(child.note) : child.path);
 			const note = this.plugin.folderNotes.noteOf(child.path);
 			if (note) this.openOnClick(row, note);
-			if (child.note) this.statusBadge(row, child.note.status);
+			if (child.note) this.changeMark(row, child.note);
 			if (!this.collapsed.has(child.path)) this.renderFolder(tree, child, depth + 1);
 		}
-		const notes = [...folder.changes].sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+		const notes = [...folder.changes].sort((a, b) => noteBasename(a.path).localeCompare(noteBasename(b.path)));
 		for (const change of notes) this.renderChange(tree, change, depth, false);
 	}
 
@@ -381,23 +390,36 @@ export class XWikiPanelView extends ItemView {
 		row.addEventListener("click", (event) => void this.app.workspace.getLeaf(Keymap.isModEvent(event)).openFile(file));
 	}
 
-	private statusBadge(row: HTMLElement, status: NoteChange["status"]): void {
-		const badge = row.createSpan({ cls: `xwiki-change-status mod-${status}`, text: STATUS_LETTER[status] });
-		setTooltip(badge, STATUS_TOOLTIP[status]);
+	/** The status letter of a change; a deleted note also gets a button to keep its page. */
+	private changeMark(row: HTMLElement, change: NoteChange): void {
+		if (change.status === "deleted") {
+			const keep = row.createDiv({ cls: "clickable-icon xwiki-change-keep" });
+			setIcon(keep, "x");
+			const tooltip = "Keep the XWiki page and remove this from the list";
+			setTooltip(keep, tooltip);
+			keep.setAttr("aria-label", tooltip);
+			keep.addEventListener("click", (event) => {
+				event.stopPropagation();
+				void this.plugin.keepDeletedPage(change.note);
+			});
+		}
+		const badge = row.createSpan({ cls: `xwiki-change-status mod-${change.status}`, text: STATUS_LETTER[change.status] });
+		setTooltip(badge, STATUS_TOOLTIP[change.status]);
 	}
 
-	/** A changed note: selection box, name, its folder in the flat list, and its status letter. Selecting it opens the note. */
+	/** A changed note: selection box, name, its folder in the flat list, and its status letter. Selecting it opens the note, if it still exists. */
 	private renderChange(tree: HTMLElement, change: NoteChange, depth: number, showFolder: boolean): void {
-		const { file, status } = change;
 		const row = tree.createDiv({ cls: "xwiki-change-row xwiki-change-note" });
+		row.toggleClass("mod-deleted", change.status === "deleted");
 		row.setCssProps({ "--xwiki-depth": String(depth) });
 		row.createSpan({ cls: "xwiki-change-chevron" });
-		this.selectionBox(row, [file.path], `Select ${file.path}`);
-		row.createSpan({ cls: "xwiki-change-name", text: file.basename });
-		if (showFolder && file.parent && !file.parent.isRoot()) row.createSpan({ cls: "xwiki-change-folder-path", text: file.parent.path });
-		this.statusBadge(row, status);
-		setTooltip(row, file.path);
-		this.openOnClick(row, file);
+		this.selectionBox(row, [change.path], `Select ${change.path}`);
+		row.createSpan({ cls: "xwiki-change-name", text: noteBasename(change.path) });
+		const folder = parentPath(change.path);
+		if (showFolder && folder) row.createSpan({ cls: "xwiki-change-folder-path", text: folder });
+		this.changeMark(row, change);
+		setTooltip(row, changeTooltip(change));
+		if (change.file) this.openOnClick(row, change.file);
 	}
 
 	private button(setting: Setting, label: string, onClick: () => unknown, options: { cta?: boolean; icon?: string } = {}): void {

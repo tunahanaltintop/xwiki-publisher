@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Deleted notes**: the *Source control* tab lists notes deleted from the vault with a red **D**. Selecting one and publishing deletes its XWiki page, after a confirmation that names the page, and removes the OpenProject links of the page. Pages changed on XWiki or not written in Markdown are kept unless you choose to overwrite them, and a page another note still belongs to is never offered. The **×** on the row keeps the page and removes the note from the list. Needs *delete* right on the page.
 - **OpenProject links**: with an OpenProject URL and API token in the settings, publishing a note (one note, a folder or the *Source control* selection) links its XWiki page to the work packages the note links to, in their **Wikis** tab. A work package that already has the link is left alone, and when a link leaves the note its work package loses the page. Each note's result is shown in **Recent activity**, which now keeps the last 100 entries. The panel's *Connection* section and the settings can test the connection. Needs OpenProject 17.6 or later with its XWiki integration; see `docs/OPENPROJECT_SETUP.md`.
 
 ## 1.4.1

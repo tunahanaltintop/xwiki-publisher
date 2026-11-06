@@ -13,6 +13,7 @@ import {
 	serializeReference,
 } from "./location";
 import { choose, chooseFolder, prompt } from "./modals";
+import { DeletedNote, deletionBlocker, deletionOrder, noteBasename } from "./deletions";
 import { FolderNotes } from "./folder-notes";
 import { describeLinks, failedReport, LinkReport, syncPageLinks, workPackagesIn } from "./openproject";
 import { OpenProjectClient } from "./openproject-client";
@@ -23,6 +24,7 @@ import { RemotePage, XWikiClient } from "./xwiki-client";
 
 interface PluginData extends Partial<XWikiPublisherSettings> {
 	syncState?: SyncState;
+	deletedNotes?: SyncState;
 	attachmentPaths?: AttachmentPaths;
 	attachmentVersions?: AttachmentVersions;
 	uploadedAttachments?: UploadedAttachments;
@@ -42,10 +44,15 @@ interface NotePublishResult {
 	links: LinkReport | null;
 }
 
-/** A note with local changes to publish: never synced with XWiki (`added`), or edited since its last sync (`modified`). */
-export interface NoteChange {
-	file: TFile;
-	status: "added" | "modified";
+/** A note with local changes to publish: never synced with XWiki (`added`), edited since its last sync (`modified`), or removed from the vault (`deleted`). */
+export type NoteChange = { path: string; status: "added" | "modified"; file: TFile } | { path: string; status: "deleted"; file: null; note: DeletedNote };
+
+/** What deleting the page of a deleted note did. */
+interface PageDeletionResult {
+	outcome: "deleted" | "gone" | "skipped";
+	/** Why the page was kept, for `skipped`. */
+	reason?: string;
+	links: LinkReport | null;
 }
 
 export interface ActivityEntry {
@@ -66,6 +73,7 @@ function isConflictCopy(file: TFile): boolean {
 export default class XWikiPublisherPlugin extends Plugin {
 	settings: XWikiPublisherSettings = { ...DEFAULT_SETTINGS };
 	syncState: SyncState = {};
+	deletedNotes: SyncState = {};
 	attachmentPaths: AttachmentPaths = {};
 	attachmentVersions: AttachmentVersions = {};
 	uploadedAttachments: UploadedAttachments = {};
@@ -176,6 +184,8 @@ export default class XWikiPublisherPlugin extends Plugin {
 
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.sync.onRename(file, oldPath)));
 		this.registerEvent(this.app.vault.on("delete", (file) => this.sync.onDelete(file)));
+		this.registerEvent(this.app.vault.on("create", (file) => this.sync.onCreate(file)));
+		this.app.workspace.onLayoutReady(() => this.sync.reconcileRecords());
 	}
 
 	/** Opens the side panel in the right sidebar, or reveals it when already open. */
@@ -262,17 +272,28 @@ export default class XWikiPublisherPlugin extends Plugin {
 	}
 
 	/**
-	 * Notes of the vault that publishing would change on XWiki: never synced, or edited since their last sync.
+	 * Notes that publishing would change on XWiki: never synced, edited since their last sync, or deleted from the vault.
 	 * Only notes with a sync record are read, to compare them with their fingerprint. Ordered by path.
 	 */
 	async localChanges(): Promise<NoteChange[]> {
+		this.sync.reconcileRecords();
 		const changes: NoteChange[] = [];
-		for (const file of this.app.vault.getMarkdownFiles()) {
-			if (isConflictCopy(file)) continue;
-			if (!this.syncState[file.path]) changes.push({ file, status: "added" });
-			else if (this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file))) changes.push({ file, status: "modified" });
+		const notes = this.publishableNotes();
+		for (const file of notes) {
+			if (!this.syncState[file.path]) changes.push({ path: file.path, file, status: "added" });
+			else if (this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file))) changes.push({ path: file.path, file, status: "modified" });
 		}
-		return changes.sort((a, b) => a.file.path.localeCompare(b.file.path));
+		for (const note of this.sync.pendingDeletions(notes)) changes.push({ path: note.path, file: null, status: "deleted", note });
+		return changes.sort((a, b) => a.path.localeCompare(b.path));
+	}
+
+	private publishableNotes(): TFile[] {
+		return this.app.vault.getMarkdownFiles().filter((file) => !isConflictCopy(file));
+	}
+
+	/** Leaves the page of a deleted note on XWiki and stops listing the note. */
+	keepDeletedPage(note: DeletedNote): Promise<void> {
+		return this.sync.forgetDeleted(note.reference);
 	}
 
 	/** Compares the note's last synced version with the page on XWiki. */
@@ -357,12 +378,13 @@ export default class XWikiPublisherPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		const { syncState, attachmentPaths, attachmentVersions, uploadedAttachments, ...settings } = ((await this.loadData()) as PluginData | null) ?? {};
+		const { syncState, deletedNotes, attachmentPaths, attachmentVersions, uploadedAttachments, ...settings } = ((await this.loadData()) as PluginData | null) ?? {};
 		this.settings = { ...DEFAULT_SETTINGS, ...settings };
 		// Removed options: pages are always written in Markdown, and XWiki syntax pages are converted from their view.
 		delete (this.settings as Partial<Record<"contentMode" | "xwikiConversion", unknown>>).contentMode;
 		delete (this.settings as Partial<Record<"contentMode" | "xwikiConversion", unknown>>).xwikiConversion;
 		this.syncState = syncState ?? {};
+		this.deletedNotes = deletedNotes ?? {};
 		this.attachmentPaths = attachmentPaths ?? {};
 		this.attachmentVersions = attachmentVersions ?? {};
 		this.uploadedAttachments = uploadedAttachments ?? {};
@@ -372,6 +394,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 		await this.saveData({
 			...this.settings,
 			syncState: this.syncState,
+			deletedNotes: this.deletedNotes,
 			attachmentPaths: this.attachmentPaths,
 			attachmentVersions: this.attachmentVersions,
 			uploadedAttachments: this.uploadedAttachments,
@@ -625,7 +648,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 		}
 		// Attachment uploads create page versions too, so read the version once everything is saved.
 		const saved = await client.getPage(location);
-		if (saved) await this.sync.recordSync(file, saved.version);
+		if (saved) await this.sync.recordSync(file, saved.version, location);
 		const links = await this.syncWorkPackageLinks(client, location, remote?.content ?? "", markdown, options.status);
 		return { outcome: created ? "created" : "updated", uploaded, failed, links };
 	}
@@ -675,40 +698,71 @@ export default class XWikiPublisherPlugin extends Plugin {
 		await this.publishMany(files, `"${name}"`, "Publish folder to XWiki", `Publish ${files.length} note(s) from "${name}" and its subfolders to XWiki?`);
 	}
 
-	/** Publishes the notes selected in the panel's source control tab, with the same rules as a folder publish. */
-	async publishNotes(files: TFile[]): Promise<void> {
-		const ordered = this.publishOrder(files);
-		if (ordered.length === 0) return;
-		const label = ordered.length === 1 ? `"${ordered[0].basename}"` : `${ordered.length} selected notes`;
-		await this.publishMany(ordered, label, "Publish to XWiki", `Publish ${label} to XWiki?`);
+	/**
+	 * Publishes the changes selected in the panel's source control tab, with the same rules as a folder publish.
+	 * The pages of deleted notes among them are deleted.
+	 */
+	async publishNotes(changes: NoteChange[]): Promise<void> {
+		const ordered = this.publishOrder(changes.flatMap((change) => (change.file ? [change.file] : [])));
+		const deleted = deletionOrder(changes.flatMap((change) => (change.status === "deleted" ? [change.note] : [])));
+		const total = ordered.length + deleted.length;
+		if (total === 0) return;
+		const label = total === 1 ? `"${ordered[0]?.basename ?? noteBasename(deleted[0].path)}"` : `${total} selected notes`;
+		await this.publishMany(ordered, label, "Publish to XWiki", `Publish ${label} to XWiki?`, deleted);
 	}
 
-	/** Asks how to treat pages changed on XWiki, then publishes `files` in order; `label` names them in messages. */
-	private async publishMany(files: TFile[], label: string, title: string, question: string): Promise<void> {
+	/**
+	 * Asks how to treat pages changed on XWiki, then publishes `files` in order and deletes the pages of `deleted`;
+	 * `label` names them in messages.
+	 */
+	private async publishMany(files: TFile[], label: string, title: string, question: string, deleted: DeletedNote[] = []): Promise<void> {
 		if (this.busy) {
 			new Notice(`XWiki Publisher is busy: ${this.busy}`);
 			return;
 		}
+		const deleting = deleted.length > 0;
+		const pages = deleted.slice(0, 10).map((note) => note.reference);
+		if (deleted.length > pages.length) pages.push(`and ${deleted.length - pages.length} more`);
 		const mode = await choose<OverwriteMode | null>(
 			this.app,
 			title,
-			`${question} Notes already in sync with their page are skipped. ` +
+			`${question} ` +
+				(deleting ? `Their notes were deleted, so ${deleted.length} page(s) will be deleted from XWiki with their attachments: ${pages.join(", ")}. Pages below them stay. ` : "") +
+				"Notes already in sync with their page are skipped. " +
 				"Pages changed on XWiki since the last sync, or not written in Markdown, are skipped too, unless you choose to overwrite them.",
 			[
-				{ label: "Publish", value: "skip", cta: true },
-				{ label: "Publish and overwrite", value: "overwrite", warning: true },
+				{ label: deleting ? "Publish and delete" : "Publish", value: "skip", cta: !deleting, warning: deleting },
+				{ label: deleting ? "Overwrite and delete" : "Publish and overwrite", value: "overwrite", warning: true },
 				{ label: "Cancel", value: null },
 			],
 		);
 		if (!mode) return;
-		await this.exclusive(`publishing ${label}`, () => this.doPublishMany(label, files, mode));
+		await this.exclusive(`publishing ${label}`, () => this.doPublishMany(label, files, mode, deleted));
 	}
 
-	private async doPublishMany(label: string, files: TFile[], mode: OverwriteMode): Promise<void> {
+	/**
+	 * Deletes the page of a deleted note. The links go first, while OpenProject can still read the page: if the page
+	 * cannot be deleted, publishing a note to it links it again, while links left behind a deleted page have no way back.
+	 */
+	private async deleteNotePage(client: XWikiClient, note: DeletedNote, mode: OverwriteMode, status: (message: string) => void): Promise<PageDeletionResult> {
+		const remote = await client.getPage(note.location);
+		if (!remote) {
+			await this.sync.forgetDeleted(note.reference);
+			return { outcome: "gone", links: null };
+		}
+		const reason = mode === "overwrite" ? null : deletionBlocker(remote, note.version);
+		if (reason) return { outcome: "skipped", reason, links: null };
+		const links = await this.syncWorkPackageLinks(client, note.location, remote.content, "", status);
+		await client.deletePage(note.location);
+		await this.sync.forgetDeleted(note.reference);
+		return { outcome: "deleted", links };
+	}
+
+	private async doPublishMany(label: string, files: TFile[], mode: OverwriteMode, deleted: DeletedNote[] = []): Promise<void> {
 		const client = this.clientOrNotice();
 		if (!client) return;
 		const notice = new Notice(`Publishing ${label} to XWiki…`, 0);
-		const counts = { created: 0, updated: 0, unchanged: 0, skipped: 0, failed: 0, cancelled: 0 };
+		const counts = { created: 0, updated: 0, unchanged: 0, deleted: 0, gone: 0, skipped: 0, failed: 0, cancelled: 0 };
 		const skipped: string[] = [];
 		// Notes that failed, grouped by error message: a missing right or a bad token fails every note the same way.
 		const failures = new Map<string, string[]>();
@@ -717,6 +771,19 @@ export default class XWikiPublisherPlugin extends Plugin {
 		const status = (message: string) => {
 			notice.setMessage(message);
 			this.progress(message);
+		};
+		const countLinks = (name: string, links: LinkReport | null) => {
+			if (!links) return;
+			linkCounts.linked += links.linked.length;
+			linkCounts.existing += links.existing.length;
+			linkCounts.removed += links.removed.length;
+			linkCounts.failed += links.failed.length;
+			this.log(describeLinks(name, links), links.failed.length > 0);
+		};
+		const countFailure = (name: string, error: unknown) => {
+			counts.failed++;
+			const message = errorMessage(error);
+			failures.set(message, [...(failures.get(message) ?? []), name]);
 		};
 		try {
 			this.cancellable = true;
@@ -734,18 +801,35 @@ export default class XWikiPublisherPlugin extends Plugin {
 						counts[result.outcome]++;
 						if (result.reason) skipped.push(`${file.basename} (${result.reason})`);
 						attachmentFailures.push(...result.failed.map((attachment) => `${file.basename}/${attachment}`));
-						if (result.links) {
-							linkCounts.linked += result.links.linked.length;
-							linkCounts.existing += result.links.existing.length;
-							linkCounts.removed += result.links.removed.length;
-							linkCounts.failed += result.links.failed.length;
-							this.log(describeLinks(file.basename, result.links), result.links.failed.length > 0);
-						}
+						countLinks(file.basename, result.links);
 					} catch (error) {
 						console.error(`XWiki Publisher: failed to publish ${file.path}`, error);
-						counts.failed++;
-						const message = errorMessage(error);
-						failures.set(message, [...(failures.get(message) ?? []), file.basename]);
+						countFailure(file.basename, error);
+					}
+				}
+				// Checked after publishing: a note published just now may have taken over the page.
+				const pending = new Set(deleted.length > 0 ? this.sync.pendingDeletions(this.publishableNotes()).map((note) => note.reference) : []);
+				for (const [i, note] of deleted.entries()) {
+					if (this.cancelRequested) {
+						counts.cancelled += deleted.length - i;
+						break;
+					}
+					const name = noteBasename(note.path);
+					if (!pending.has(note.reference)) {
+						counts.skipped++;
+						skipped.push(`${name} (page used by another note)`);
+						continue;
+					}
+					status(`Deleting ${i + 1}/${deleted.length}: ${name}`);
+					try {
+						const result = await this.deleteNotePage(client, note, mode, status);
+						counts[result.outcome]++;
+						if (result.reason) skipped.push(`${name} (${result.reason})`);
+						if (result.outcome === "deleted") this.log(`Deleted XWiki page ${note.reference}.`);
+						countLinks(name, result.links);
+					} catch (error) {
+						console.error(`XWiki Publisher: failed to delete ${note.reference}`, error);
+						countFailure(name, error);
 					}
 				}
 			});
@@ -754,6 +838,8 @@ export default class XWikiPublisherPlugin extends Plugin {
 				`${counts.created} created`,
 				`${counts.updated} updated`,
 				`${counts.unchanged} unchanged`,
+				counts.deleted > 0 ? `${counts.deleted} deleted` : "",
+				counts.gone > 0 ? `${counts.gone} already gone from XWiki` : "",
 				counts.skipped > 0 ? `${counts.skipped} skipped: ${skipped.join(", ")}` : "",
 				counts.failed > 0
 					? `${counts.failed} failed: ${[...failures].map(([message, names]) => `${names.join(", ")}: ${message}`).join("; ")}`

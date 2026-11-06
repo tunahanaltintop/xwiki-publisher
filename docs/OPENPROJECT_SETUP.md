@@ -178,7 +178,9 @@ Bilinmesi gerekenler:
   elle bağlanmış hem de dokümandan çıkarılmışsa bağlantı kaldırılır.
 - Kaldırma işlemi XWiki sayfasının önceki içeriğine bakar. Kaldırma başarısız olursa link o anda sayfadan çıkmış olur
   ve sonraki publish'te yeniden denenmez: logdaki iş paketinden bağlantıyı elle kaldırın.
-- Notu silmek bağlantıları kaldırmaz, çünkü not silme işlemi XWiki'ye de yansıtılmaz.
+- Notu silmek bağlantıları tek başına kaldırmaz. Silinen not *Source control* sekmesinden seçilip publish edildiğinde,
+  önce sayfanın bağlantıları kaldırılır, sonra XWiki sayfası silinir. Bağlantılar kaldırılamazsa sayfa yine silinir ve
+  kalan iş paketleri *Recent activity* listesine yazılır; bunları OpenProject'ten elle kaldırmak gerekir.
 - OpenProject tarafındaki bir hata publish'i bozmaz: sayfa yine kaydedilir, hata logda gösterilir.
 
 ## Sorun giderme

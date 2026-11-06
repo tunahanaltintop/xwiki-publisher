@@ -15,5 +15,6 @@ xwiki-title: Test senaryoları (özel başlık)
 | `Notlar/Özel alan.md` | `xwiki-space` ile hedef alanın değiştirilmesi |
 | Bu not | `xwiki-title` ile sayfa başlığının değiştirilmesi |
 | Herhangi bir not | OpenProject linki ekleyip publish edin: bağlantı eklenir; tekrar publish edin: mükerrer eklenmez; linki silip publish edin: bağlantı kaldırılır. Sonuçlar *Recent activity* listesinde görünür. |
+| Herhangi bir yayınlanmış not | Notu silin: *Source control* sekmesinde kırmızı **D** ile görünür; seçip publish edin: onaydan sonra XWiki sayfası silinir. |
 
 Varsayılan XWiki alanı kurulum script'inde `ObsidianTest` olarak ayarlanır; tüm sayfalar bu alanın altına gider.

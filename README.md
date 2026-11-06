@@ -21,8 +21,8 @@ they keep their Markdown source and can travel both ways.
 - **Built-in folder notes**: XWiki pages that have children become folder notes, and selecting a folder in the file
   explorer shows the parent page's content. No other plugin is needed.
 - A **side panel** with every action, the note's target page, its sync state and recent activity.
-- A **Source control** tab that lists every note added or modified since its last sync, as a list or a folder tree,
-  and **publishes the selected notes** in one go.
+- A **Source control** tab that lists every note added, modified or deleted since its last sync, as a list or a folder
+  tree, and **publishes the selected changes** in one go, including deleting the pages of deleted notes.
 - **OpenProject links** (optional): published pages are linked to the work packages their notes link to, without
   duplicates, and the link is removed when it leaves the note.
 - Access tokens are kept in Obsidian's **secret storage**, never in the plugin's data file.
@@ -34,7 +34,8 @@ they keep their Markdown source and can travel both ways.
   - the **Markdown Syntax 1.2** extension installed (syntax id `markdown/1.2`);
   - an authenticator that accepts an **access token** (for example a bearer token issued by the OpenID Connect
     Provider extension) on both REST (`/rest/…`) and page (`/bin/…`) URLs;
-  - an XWiki **account** with *view* right on the spaces you pull and *edit* right on the spaces you publish to.
+  - an XWiki **account** with *view* right on the spaces you pull and *edit* right on the spaces you publish to, and
+    *delete* right where you want deleted notes to delete their pages.
 
 The XWiki administrator checklist, with commands to verify each point, is in
 [docs/XWIKI_SETUP.md](docs/XWIKI_SETUP.md) (Turkish).
@@ -73,7 +74,7 @@ two tabs:
 | --- | --- | --- |
 | Publish current note | Panel, command palette, file menu | Creates or updates the note's XWiki page and uploads its attachments. |
 | Publish folder to XWiki | Panel, command palette, folder menu | Publishes every note in a folder and its subfolders, folder notes first. |
-| Publish selected changes | Panel, *Source control* tab | Publishes the notes checked in the list of local changes. |
+| Publish selected changes | Panel, *Source control* tab | Publishes the notes checked in the list of local changes, and deletes the pages of checked deleted notes. |
 | Pull current note from XWiki | Panel, command palette, file menu | Updates the note from its XWiki page. |
 | Check XWiki | Panel | Tells whether the page changed on XWiki since the last sync. |
 | Import page from XWiki | Panel, command palette | Imports one page given by URL or reference (`Space.Page`). |
@@ -92,6 +93,7 @@ change on XWiki. The letter at the right of each row tells why:
 | --- | --- |
 | **A** (green) | Added: the note was never published or pulled. |
 | **M** (orange) | Modified: the note's body changed since its last publish or pull. |
+| **D** (red) | Deleted: the note left the vault, and its page is still on XWiki. |
 
 Editing only a note's properties is not a change, the same rule as for [conflicts](#conflicts). Conflict copies
 (`<Note> (XWiki conflict).md`) are not listed. The list updates as notes are created, edited, renamed, deleted,
@@ -110,7 +112,8 @@ published or pulled; the **Refresh** button scans the vault again.
 - **Publish** publishes the selected notes, with the same rules as a [folder publish](#conflicts): you choose between
   *Publish* and *Publish and overwrite*, notes are published from the outermost page inwards (folder notes first), notes
   in sync with their page are skipped, and pages changed on XWiki or not written in Markdown are skipped unless you
-  choose to overwrite them. The result lists every skipped or failed note. Published notes leave the list.
+  choose to overwrite them. The result lists every skipped or failed note. Published notes leave the list. For notes
+  marked **D**, see [Deleted notes](#deleted-notes).
 - **Recent activity** below the list shows the results of the latest operations, the same list as on the *XWiki* tab.
 
 ### Where a note is published
@@ -229,6 +232,24 @@ note's properties, or links that Obsidian rewrites when the plugin moves a file,
   changed on XWiki since the last sync, or not written in Markdown, are skipped and listed in the result, unless you
   choose *Publish and overwrite*.
 
+### Deleted notes
+
+A note that was published or pulled and then deleted from the vault, also outside Obsidian, is listed in the
+*Source control* tab with a red **D**. Nothing happens on XWiki until you select it and publish:
+
+- The confirmation names every page that will be deleted, and has *Publish and delete* and *Overwrite and delete*.
+- The page goes with its attachments, into XWiki's recycle bin unless the administrator turned it off. **Pages below it
+  stay**, and folder pages the plugin created for the note's folders stay too.
+- A page changed on XWiki since the last sync, or not written in Markdown, is kept and listed in the result, unless you
+  choose *Overwrite and delete*.
+- A page that another note belongs to, for example a copy of the note with the same `xwiki-reference`, is never listed.
+- A page that is already gone from XWiki is just removed from the list.
+- *Publish folder* and *Publish* on a note never delete pages.
+
+To keep the page, select the **×** on the row: the note leaves the list and the page stays on XWiki. Restoring the note
+from the trash, or pulling its page again, also takes it off the list. Notes deleted before the plugin tracked deleted
+notes are not listed, because it did not keep what it needs to find their pages.
+
 ### OpenProject links
 
 Links in a note stay plain links on XWiki, so OpenProject would not know about the page. With an OpenProject set up,
@@ -259,6 +280,7 @@ https://openproject.example.com/projects/demo/work_packages/details/123/overview
 | A work package was linked by hand and the page never linked to it | Nothing. |
 | A note in a folder publish is in sync with its page | Its links are still checked, so existing pages get linked after setup. |
 | The page is skipped, for example because it changed on XWiki | Nothing. |
+| The page is deleted through a [deleted note](#deleted-notes) | The links of the page are removed first. |
 
 Every note with work package links gets a line in **Recent activity**, for example
 `OpenProject links of "Plan": linked #12; already linked #15; removed #9`. A folder publish also adds the totals to its
@@ -319,7 +341,8 @@ in OpenProject by hand.
   kept, but formatting without a Markdown equivalent (underline, CSS classes, `(% %)` parameters) is lost. The plugin
   asks for confirmation before publishing over a page that is not written in Markdown.
 - Kept macros run on XWiki only if the macro's extension is installed there.
-- Deleting a note or a page is not synced: delete it on the other side yourself.
+- Deleting a page on XWiki is not synced to the vault. Deleting a note deletes its page only through the
+  [*Source control* tab](#deleted-notes).
 - Pages are found through `/bin/view/…` and `/bin/download/…` URLs below the configured XWiki URL. Instances with a
   different URL scheme are not supported.
 - Space sync lists spaces through the REST API and falls back to XWiki's search index, which is updated with a short
@@ -331,7 +354,8 @@ in OpenProject by hand.
 
 - **Network use**: the plugin only talks to the XWiki server you configure, and only when you run an action (test
   connection, publish, pull, import, sync, check). It sends the notes you publish and their attachments, and
-  downloads the pages you pull with their attachments. If you configure OpenProject, it also talks to that server,
+  downloads the pages you pull with their attachments. It deletes a page only when you select its deleted note in the
+  *Source control* tab, publish and confirm. If you configure OpenProject, it also talks to that server,
   when you test the connection and when you publish a note with work package links: it sends the work package numbers
   and the page's identifier, never the note's content.
 - **Account**: an XWiki account and an access token for it are required. OpenProject links need an OpenProject account

@@ -1,5 +1,6 @@
 import { App, getLinkpath, normalizePath, Notice, TAbstractFile, TFile, TFolder } from "obsidian";
 import { stripFrontmatter } from "./converter";
+import { DeletedNote, deletedNotes } from "./deletions";
 import { contentHash } from "./hash";
 import { xwikiHtmlToMarkdown } from "./html";
 import {
@@ -42,6 +43,8 @@ export interface SyncRecord {
 	 * its page moves; once the user put it elsewhere, it stays where the user put it. Empty: placed by the user.
 	 */
 	placedAt?: string;
+	/** Page the note was last synced with, kept so that the page can still be found once the note is deleted. */
+	reference?: string;
 }
 
 export type SyncState = Record<string, SyncRecord>;
@@ -74,6 +77,8 @@ export interface SyncHost {
 	app: App;
 	settings: XWikiPublisherSettings;
 	syncState: SyncState;
+	/** Sync records of notes deleted from the vault, by their last path, until their pages are deleted or kept. */
+	deletedNotes: SyncState;
 	attachmentPaths: AttachmentPaths;
 	attachmentVersions: AttachmentVersions;
 	uploadedAttachments: UploadedAttachments;
@@ -181,16 +186,69 @@ export class SyncService {
 		return index;
 	}
 
-	/** Records that the note and the page agree, at the page's `version`. */
-	async recordSync(file: TFile, version: string, placed = false): Promise<void> {
+	/**
+	 * Records that the note and the page at `location` agree, at the page's `version`. The location is given, not read
+	 * from the note, because the properties of a note that was just written are not in the metadata cache yet.
+	 */
+	async recordSync(file: TFile, version: string, location: PageLocation, placed = false): Promise<void> {
 		const previous = this.host.syncState[file.path];
+		const reference = serializeReference(location);
+		this.dropDeleted(reference);
 		this.host.syncState[file.path] = {
 			version,
 			bodyHash: bodyHash(await this.app.vault.read(file)),
+			reference,
 			// Notes synced before placement was recorded count as placed where they are now.
 			placedAt: placed ? file.path : (previous?.placedAt ?? file.path),
 		};
 		await this.save();
+	}
+
+	/** Notes deleted from the vault whose pages are not used by any of `notes`, the live notes of the vault. */
+	pendingDeletions(notes: TFile[]): DeletedNote[] {
+		const records = this.host.deletedNotes;
+		if (Object.keys(records).length === 0) return [];
+		const live = new Set<string>();
+		for (const file of notes) {
+			live.add(serializeReference(this.locate(file)));
+			const reference = this.host.syncState[file.path]?.reference;
+			if (reference) live.add(reference);
+		}
+		return deletedNotes(records, live);
+	}
+
+	/** Stops tracking the deleted notes of the page: it was deleted, or the user keeps it. */
+	async forgetDeleted(reference: string): Promise<void> {
+		this.dropDeleted(reference);
+		await this.save();
+	}
+
+	private dropDeleted(reference: string): void {
+		for (const [path, record] of Object.entries(this.host.deletedNotes)) {
+			if (record.reference === reference) delete this.host.deletedNotes[path];
+		}
+	}
+
+	/**
+	 * Brings the records up to date with the vault. Records written by earlier versions get the page of their note,
+	 * once its properties are known. Notes that left the vault while Obsidian was closed count as deleted.
+	 */
+	reconcileRecords(): void {
+		if (!this.app.workspace.layoutReady) return;
+		let changed = false;
+		for (const [path, record] of Object.entries(this.host.syncState)) {
+			const file = this.app.vault.getFileByPath(path);
+			if (!file) {
+				if (!record.reference) continue;
+				this.host.deletedNotes[path] = record;
+				delete this.host.syncState[path];
+				changed = true;
+			} else if (!record.reference && this.app.metadataCache.getFileCache(file)) {
+				record.reference = serializeReference(this.locate(file));
+				changed = true;
+			}
+		}
+		if (changed) void this.save();
 	}
 
 	/** Whether the note was edited since it was last published or pulled. */
@@ -745,7 +803,7 @@ export class SyncService {
 				await this.followLocation(existing, client, location, remote, options);
 				await this.writeMetadata(existing, client, location, remote, false);
 				await this.relocateAttachments(client, location, existing);
-				await this.recordSync(existing, remote.version);
+				await this.recordSync(existing, remote.version, location);
 				return result("unchanged");
 			}
 			// Decide about conflicts before downloading anything, so the local note's files are never touched first.
@@ -785,7 +843,7 @@ export class SyncService {
 			await this.writeMetadata(file, client, location, remote, true);
 		}
 		await this.relocateAttachments(client, location, file);
-		await this.recordSync(file, remote.version, !existing);
+		await this.recordSync(file, remote.version, location, !existing);
 		return result(existing ? "updated" : "created");
 	}
 
@@ -891,15 +949,34 @@ export class SyncService {
 			this.host.attachmentPaths[key] = target;
 			changed = true;
 		}
+		if (file instanceof TFile) changed = this.restoreDeleted(file.path) || changed;
 		if (changed) void this.save();
 	}
 
-	/** Forgets sync records and attachments of deleted files, including everything inside a deleted folder. */
+	/** A note back at the path of a deleted note, such as one restored from the trash, is that note again. */
+	onCreate(file: TAbstractFile): void {
+		if (file instanceof TFile && this.restoreDeleted(file.path)) void this.save();
+	}
+
+	private restoreDeleted(path: string): boolean {
+		const record = this.host.deletedNotes[path];
+		if (!record) return false;
+		delete this.host.deletedNotes[path];
+		this.host.syncState[path] ??= record;
+		return true;
+	}
+
+	/**
+	 * Forgets attachments of deleted files, including everything inside a deleted folder. The sync records of deleted
+	 * notes are kept apart, so that the source control tab can offer to delete their pages.
+	 */
 	onDelete(file: TAbstractFile): void {
 		const gone = (path: string) => path === file.path || path.startsWith(`${file.path}/`);
 		let changed = false;
 		for (const path of Object.keys(this.host.syncState)) {
 			if (!gone(path)) continue;
+			const record = this.host.syncState[path];
+			if (record.reference) this.host.deletedNotes[path] = record;
 			delete this.host.syncState[path];
 			changed = true;
 		}

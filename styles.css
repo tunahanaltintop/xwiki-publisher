@@ -235,6 +235,24 @@
 	color: var(--color-orange);
 }
 
+.xwiki-change-status.mod-deleted {
+	color: var(--color-red);
+}
+
+.xwiki-change-note.mod-deleted .xwiki-change-name {
+	color: var(--text-muted);
+}
+
+.xwiki-change-keep {
+	flex: 0 0 auto;
+	margin-left: auto;
+	padding: 0;
+}
+
+.xwiki-change-keep + .xwiki-change-status {
+	margin-left: 0;
+}
+
 .xwiki-change-count {
 	color: var(--text-muted);
 	font-weight: var(--font-normal);

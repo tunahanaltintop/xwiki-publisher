@@ -111,8 +111,11 @@ başlıyorsa bağlantı testinde uyarı verir.
 | Publish (sayfa oluşturma, güncelleme) | **Edit** | Hedef sayfa veya space |
 | Ek dosya yükleme | **Edit** | Hedef sayfa |
 | Klasör sayfası oluşturma (*Create folder pages*) | **Edit** | Klasörlere karşılık gelen üst alanlar |
+| Silinen notun sayfasını silme (*Source control*) | **Delete** | Silinecek sayfa |
 
-*Script*, *programming*, *admin* veya *delete* hakları **gerekmez**. Eklenti hiçbir sayfayı silmez.
+*Script*, *programming* veya *admin* hakları **gerekmez**. *Delete* hakkı yalnızca silinen notların sayfalarını
+*Source control* sekmesinden silmek için gerekir; eklenti bir sayfayı yalnızca bu sekmede kullanıcı seçip onayladığında
+siler.
 
 Yetki eksikse eklenti şu hatayı gösterir: *"Access denied: xwiki:XWiki.<kullanıcı> has no edit right on <sayfa>"*.
 XWiki bu durumda 401 kodu döndürse de sorun token'da değil haktadır.
@@ -231,7 +234,7 @@ Ayarlarda OpenProject adresi girilmişse eklenti o sunucuya da bağlanır
 | --- | --- | --- |
 | "Authentication failed (401). Check your XWiki token." | Token geçersiz, süresi dolmuş veya iptal edilmiş | Yeni token oluşturun; 2. bölümdeki doğrulamayı yapın. |
 | "token was not accepted (request ran as guest)" | Token doğrulayıcı header'ı kabul etmiyor veya proxy header'ı siliyor | 2. ve 5. bölümler. |
-| "Access denied: … has no edit right on …" | Hak eksik | 4. bölüm. |
+| "Access denied: … has no edit right on …" veya "… has no delete right on …" | Hak eksik | 4. bölüm. |
 | "XWiki cannot parse markdown/1.2" | Markdown Syntax 1.2 kurulu değil | 1. bölüm. |
 | "XWiki did not answer with JSON … a login page may have been returned" | İstek giriş sayfasına yönlendirildi | Token doğrulayıcısının REST ve `/bin` adreslerinde çalıştığını doğrulayın. |
 | Sync "No page found at or below …" | Space listede yok ve Solr sorgusu çalışmadı veya indeks eksik | 6. bölüm. |

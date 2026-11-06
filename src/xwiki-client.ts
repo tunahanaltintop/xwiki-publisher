@@ -174,7 +174,7 @@ export class XWikiClient {
 					? `Access denied (401) for ${user}. The user may lack rights on the target page.`
 					: "Authentication failed (401). Check your XWiki token.";
 			case 403:
-				return "Access denied (403). The token user has no edit right on this page.";
+				return "Access denied (403). The token user has no right to do this on the page.";
 			case 404:
 				return "Not found (404). Check the XWiki URL and wiki name.";
 			default:
@@ -241,6 +241,11 @@ export class XWikiClient {
 			body,
 		});
 		return response.status === 201;
+	}
+
+	/** Deletes the page with its attachments; the pages below it stay. A page that no longer exists is not an error. */
+	async deletePage(location: PageLocation): Promise<void> {
+		await this.send({ url: this.pageRestUrl(location), method: "DELETE", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
 	}
 
 	/** Reads a page, or returns `null` when it does not exist. */
