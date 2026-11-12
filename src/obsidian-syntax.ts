@@ -64,9 +64,12 @@ function headingKey(text: string): string {
 		.toLowerCase();
 }
 
-/** Text a link uses for a heading: the heading without the characters Obsidian links cannot contain. */
+/**
+ * Text a link uses for a heading: its plain text (`## **1.1 Amaç**` gives `1.1 Amaç`, as the note's own links write
+ * it) without the characters Obsidian links cannot contain.
+ */
 function linkHeading(heading: string): string {
-	return heading.replace(/[#|^:[\]]/g, " ").replace(/\s+/g, " ").trim();
+	return plainHeading(heading).replace(/[#|^:[\]]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 /** XWiki anchor for an Obsidian link subpath (`Heading` or `^block`) into a note with these headings. */
