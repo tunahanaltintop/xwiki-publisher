@@ -138,15 +138,35 @@ The page title is the note name, or the `xwiki-title` property when set.
 
 | In the note | On XWiki |
 | --- | --- |
-| Frontmatter, `%%comments%%` | Removed |
-| `![[image.png]]`, `![](image.png)` | Image pointing at the uploaded attachment |
-| `![[file.pdf]]`, `[label](file.pdf)` | Link to the uploaded attachment |
-| `[[Note]]`, `[[Note#Heading\|alias]]` | Link to the page the note is (or will be) published to |
-| `![[Note]]` (transclusion) | Link to the note's page; XWiki has no transclusion |
+| Frontmatter | Removed |
+| `%%comments%%` | Removed, or kept as hidden `{{comment}}` macros (setting **Obsidian comments**) |
+| `![[image.png]]`, `![](image.png)` | Image of the uploaded attachment: `![[alt\|image.png]]` |
+| `![[image.png\|300]]`, `\|300x200` | Sized image: `{{content syntax="xwiki/2.1"}}[[image:image.png\|\|width="300"]]{{/content}}` |
+| `![[file.pdf]]`, `[label](file.pdf)` | Link to the uploaded attachment: `[[label\|attach:file.pdf]]` |
+| `[[Note]]`, `[[Note\|alias]]` | Link to the page the note is (or will be) published to: `[[alias\|doc:Space.Note.WebHome]]` |
+| `[[Note#Heading]]`, `[[Note#^block]]` | The same link with `anchor="HHeading"` / `anchor="block"` |
+| `[[#Heading]]` | Link to the heading on the same page (`#HHeading`) |
+| `![[Note]]`, `![[Note#Heading]]` | `{{display reference="Space.Note.WebHome" section="HHeading"/}}`: the page or section is shown in place |
+| `> [!tip] Title` callouts | Message boxes: `{{info}}`, `{{success}}`, `{{warning}}` or `{{error}}` with the title; the box content stays Markdown |
+| `==highlight==` | `<mark>highlight</mark>` |
+| `- [ ]`, `- [x]`, `- [X]` | `- ☐`, `- ☑`, `- ☒` |
+| `[^1]` footnotes, `^[inline footnotes]` | `{{footnote}}…{{/footnote}}`, listed at the end of the page |
+| `text ^block-id` | `text {{id name="block-id"/}}`, an anchor links can target |
+| Single line breaks | Kept as line breaks when Obsidian shows them so (setting **Line breaks**) |
+| `~`, `^`, a line starting with `:` or `*[` | Escaped: Markdown 1.2 would read them as subscript, superscript, definition or abbreviation |
 | XWiki macros (`{{toc/}}`, `{{info}}…{{/info}}`) | Unchanged: Markdown 1.2 runs them like XWiki syntax does |
 | Empty table cells | Filled with a non-breaking space (`&nbsp;`), so XWiki keeps the columns |
 | Unresolved `[[links]]` | Plain text |
 | Code blocks and inline code | Unchanged |
+
+Links and images are written as XWiki references rather than URLs: XWiki lists them as links of the page, updates
+them when a page is renamed or moved, and they do not depend on the address of the wiki. Heading anchors are computed
+the way XWiki generates them (`H` followed by the heading text without spaces, other characters written in hex:
+`Giriş` → `HGiri15F`).
+
+Pulling turns each of these back into the Obsidian syntax it came from, so a page that is not edited on XWiki gives
+back its note. Exceptions: footnotes come back numbered with their definitions at the end, a Markdown link to a note
+comes back as a wiki link, and an embed's alias is not kept.
 
 Publishing over a page that is not written in Markdown asks for confirmation first, because the page's syntax
 changes to Markdown and its macros are lost.
@@ -318,6 +338,8 @@ in OpenProject by hand.
 | Create folder pages | On | Create an empty page for each mirrored folder that has none. |
 | Use nested pages | On | Nested pages (`Space.Note.WebHome`) instead of terminal pages (`Space.Note`). |
 | Markdown syntax | `markdown/1.2` | Syntax id the pages are saved with. |
+| Line breaks | Same as Obsidian | Publish single line breaks as line breaks (unless Obsidian's *Strict line breaks* is on), always, or never. |
+| Obsidian comments | Remove | Remove `%%comments%%`, or keep them as `{{comment}}` macros: hidden on the page, visible in its source. |
 | Upload attachments | On | Upload embedded images and linked files. |
 | Save page URL in note | On | Write `xwiki-url` to the note. |
 | **Sync** | | |
@@ -334,12 +356,15 @@ in OpenProject by hand.
 
 ## Limitations
 
-- Obsidian-only syntax such as highlights (`==text==`), callouts, block references and embedded notes has no XWiki
-  Markdown equivalent and is published as plain text or links.
+- Math (`$…$`) and Mermaid diagrams are published as text and code: the formula, MathJax and Mermaid macros are
+  separate XWiki extensions. Foldable callouts are shown open on XWiki.
+- With comments removed (the default), a note pulled after its page was edited on XWiki loses its `%%comments%%`.
+  Keep them as `{{comment}}` macros to avoid this, knowing that page editors can read them.
 - Converting a non-Markdown page is lossy. By default macros are kept as their rendered output (for example links),
   and publishing such a note replaces the page's macros with that output. With **Keep XWiki macros** on, macros are
-  kept, but formatting without a Markdown equivalent (underline, CSS classes, `(% %)` parameters) is lost. The plugin
-  asks for confirmation before publishing over a page that is not written in Markdown.
+  kept, but formatting without a Markdown equivalent (CSS classes, `(% %)` parameters) is lost; underline,
+  superscript and subscript become `<u>`, `<sup>` and `<sub>`. The plugin asks for confirmation before publishing
+  over a page that is not written in Markdown.
 - Kept macros run on XWiki only if the macro's extension is installed there.
 - Deleting a page on XWiki is not synced to the vault. Deleting a note deletes its page only through the
   [*Source control* tab](#deleted-notes).

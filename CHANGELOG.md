@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Obsidian syntax on XWiki**: callouts become message boxes (`{{info}}`, `{{success}}`, `{{warning}}`, `{{error}}`) with their title, highlights become `<mark>`, task lists get ☐/☑/☒, footnotes become `{{footnote}}` macros, block ids become `{{id}}` anchors, embedded notes and sections are shown with `{{display}}`, and sized images (`![[a.png|300]]`) keep their size. Characters that XWiki Markdown would read as subscript, superscript, definitions or abbreviations are escaped. Pulling turns all of them back into the Obsidian syntax.
+- **Links as XWiki references**: page links and attachments are written as XWiki references (`[[label|doc:Space.Note.WebHome]]`, `![[alt|a.png]]`) instead of URLs, so XWiki tracks them and updates them on renames. Links to headings and blocks (`[[Note#Heading]]`, `[[#Heading]]`, `[[Note#^block]]`) now point at the heading or block, with the anchor XWiki generates, and come back unchanged on pull; before, the heading was dropped and the pulled link got a `Note > Heading` alias.
+- **Line breaks**: single line breaks are published as line breaks when Obsidian shows them so (setting *Line breaks*); XWiki Markdown joined such lines into one.
+- **Comments**: new setting *Obsidian comments* to keep `%%comments%%` as hidden `{{comment}}` macros, so they survive a pull after an edit on XWiki.
+- Pages in XWiki syntax: underline, superscript and subscript are pulled as `<u>`, `<sup>` and `<sub>` instead of being dropped or written in a syntax Obsidian does not show.
+
 ## 1.5.0
 
 - **Deleted notes**: the *Source control* tab lists notes deleted from the vault with a red **D**. Selecting one and publishing deletes its XWiki page, after a confirmation that names the page, and removes the OpenProject links of the page. Pages changed on XWiki or not written in Markdown are kept unless you choose to overwrite them, and a page another note still belongs to is never offered. The **×** on the row keeps the page and removes the note from the list. Needs *delete* right on the page.

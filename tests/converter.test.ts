@@ -28,7 +28,7 @@ test("converts wiki links with alias and heading", () => {
 	const { markdown } = convertNote("See [[Other]], [[Other|that]], [[Other#Intro]] and [[Missing]].", resolve);
 	assert.equal(
 		markdown,
-		"See [Other](https://w/bin/view/S/Other), [that](https://w/bin/view/S/Other), [Other > Intro](https://w/bin/view/S/Other) and Missing.\n",
+		"See [Other](https://w/bin/view/S/Other), [that](https://w/bin/view/S/Other), [Other > Intro](https://w/bin/view/S/Other#HIntro) and Missing.\n",
 	);
 });
 

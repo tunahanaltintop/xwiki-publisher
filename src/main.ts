@@ -1,6 +1,7 @@
 import { Menu, normalizePath, Notice, Plugin, TAbstractFile, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { convertNote, ResolvedLink } from "./converter";
 import {
+	contentReference,
 	folderPages,
 	FM_URL,
 	FolderNoteLocation,
@@ -17,7 +18,7 @@ import { DeletedNote, deletionBlocker, deletionOrder, noteBasename } from "./del
 import { FolderNotes } from "./folder-notes";
 import { describeLinks, failedReport, LinkReport, syncPageLinks, workPackagesIn } from "./openproject";
 import { OpenProjectClient } from "./openproject-client";
-import { DEFAULT_SETTINGS, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
+import { DEFAULT_SETTINGS, hardLineBreaks, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
 import { AttachmentPaths, AttachmentVersions, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
 import { RemotePage, XWikiClient } from "./xwiki-client";
@@ -596,14 +597,20 @@ export default class XWikiPublisherPlugin extends Plugin {
 			const target = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
 			if (!target) return null;
 			if (target.extension === "md") {
-				return { kind: "page", url: client.viewUrl(this.sync.locate(target)) };
+				const page = this.sync.locate(target);
+				const headings = this.app.metadataCache.getFileCache(target)?.headings?.map((heading) => heading.heading) ?? [];
+				return { kind: "page", url: client.viewUrl(page), reference: contentReference(page), headings };
 			}
 			// Files downloaded from this page keep their XWiki name, even when the vault file was renamed to avoid a clash.
 			const name = this.sync.attachmentNameFor(location, target.path) ?? target.name;
 			return { kind: "attachment", vaultPath: target.path, name, url: client.attachmentUrl(location, name) };
 		};
 
-		const { markdown, attachments } = convertNote(content, resolve);
+		const { markdown, attachments } = convertNote(content, resolve, {
+			hardLineBreaks: hardLineBreaks(this.settings, this.app),
+			comments: this.settings.obsidianComments,
+			xwikiReferences: true,
+		});
 
 		const remote = await client.getPage(location);
 		if (options.skipUnchanged && remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content)) {

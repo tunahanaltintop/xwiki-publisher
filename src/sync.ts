@@ -27,7 +27,7 @@ import {
 } from "./location";
 import { choose } from "./modals";
 import { convertFromXWiki, extractMarkdown, ReverseTarget, XWIKI_IMAGE, XWIKI_LINK } from "./reverse";
-import type { XWikiPublisherSettings } from "./settings";
+import { hardLineBreaks, type XWikiPublisherSettings } from "./settings";
 import { RemoteAttachment, RemotePage, XWikiClient } from "./xwiki-client";
 import { xwiki21ToMarkdown } from "./xwiki21";
 
@@ -326,11 +326,16 @@ export class SyncService {
 	private resolver(client: XWikiClient, location: PageLocation, sourcePath: string, index: Map<string, TFile>, saved: Map<string, string>) {
 		const current = serializeReference(location);
 		const attachment = (name: string): ReverseTarget => ({ kind: "attachment", name, linktext: saved.get(name) });
-		const note = (file: TFile): ReverseTarget => ({
-			kind: "note",
-			linktext: this.app.metadataCache.fileToLinktext(file, sourcePath, true),
-			basename: file.basename,
-		});
+		const note = (file: TFile): ReverseTarget => {
+			const cache = this.app.metadataCache.getFileCache(file);
+			return {
+				kind: "note",
+				linktext: this.app.metadataCache.fileToLinktext(file, sourcePath, true),
+				basename: file.basename,
+				headings: cache?.headings?.map((heading) => heading.heading) ?? [],
+				blocks: Object.keys(cache?.blocks ?? {}),
+			};
+		};
 		return (target: string, image: boolean): ReverseTarget | null => {
 			// XWiki references from wiki-style links ([[label|Space.Page]]) always resolve: to a note, an attachment or a URL.
 			if (target.startsWith(XWIKI_LINK) || target.startsWith(XWIKI_IMAGE)) {
@@ -794,7 +799,11 @@ export class SyncService {
 		// Attachments already in the vault are linked right away; new ones once they are downloaded.
 		const links = new Map<string, string>();
 		for (const [name, file] of this.trackedAttachments(location)) links.set(name, this.app.metadataCache.fileToLinktext(file, path, true));
-		const convert = () => convertFromXWiki(source, this.resolver(client, location, path, options.index, links));
+		const convert = () =>
+			convertFromXWiki(source, this.resolver(client, location, path, options.index, links), {
+				hardLineBreaks: hardLineBreaks(this.host.settings, this.app),
+				comments: this.host.settings.obsidianComments,
+			});
 		const first = convert();
 
 		if (existing) {
