@@ -180,6 +180,10 @@ changes to Markdown and its macros are lost.
   to it), as long as the note is still where the plugin put it. A pulled note you moved yourself stays where you put
   it and is only renamed after the page title; folder notes keep the name of their folder. Notes you created in the
   vault are never moved or renamed, and only folders the plugin emptied by such a move are removed.
+- A sync can be **resumed**: its progress is saved every few seconds, so after an interruption (Obsidian closed or
+  crashed during a large sync) syncing the space again skips the pages and attachments already pulled. Attachments
+  that failed to download are tried again on the next pull or sync, even when the page did not change. Pages that
+  failed are listed in the result, with the reason.
 - Attachments are downloaded again only when their XWiki version changed. Files you published from the vault are
   reused when the page is pulled, not downloaded as a copy, and they stay where you keep them.
 - Inside a dedicated **Sync folder**, folders mirror XWiki spaces from the wiki root: a new note in `XWiki/Team/` is

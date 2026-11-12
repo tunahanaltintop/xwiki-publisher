@@ -806,6 +806,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 						console.error(`XWiki Publisher: failed to publish ${file.path}`, error);
 						countFailure(file.basename, error);
 					}
+					await this.sync.checkpoint();
 				}
 				// Checked after publishing: a note published just now may have taken over the page.
 				const pending = new Set(deleted.length > 0 ? this.sync.pendingDeletions(this.publishableNotes()).map((note) => note.reference) : []);
@@ -968,7 +969,7 @@ export default class XWikiPublisherPlugin extends Plugin {
 		const notice = new Notice("Syncing from XWiki…", 0);
 		try {
 			this.cancellable = true;
-			const { counts, converted } = await this.sync.pullSpace(
+			const { counts, converted, failures } = await this.sync.pullSpace(
 				client,
 				root,
 				(message) => {
@@ -978,16 +979,19 @@ export default class XWikiPublisherPlugin extends Plugin {
 				() => this.cancelRequested,
 			);
 			notice.hide();
+			const shown = failures.slice(0, 10).join(", ");
+			const more = failures.length > 10 ? ` and ${failures.length - 10} more (all listed in the developer console)` : "";
 			const parts = [
 				`${counts.created} imported`,
 				`${counts.updated} updated`,
 				`${counts.unchanged} unchanged`,
 				counts.conflict > 0 ? `${counts.conflict} conflict(s)` : "",
 				converted > 0 ? `${converted} converted from XWiki syntax` : "",
-				counts.missing > 0 ? `${counts.missing} failed` : "",
+				counts.missing > 0 ? `${counts.missing} failed: ${shown}${more}` : "",
 				counts.cancelled > 0 ? `${counts.cancelled} not processed (cancelled)` : "",
 			].filter(Boolean);
-			this.report(`XWiki sync of "${root.join(".")}" finished: ${parts.join(", ")}.`, counts.conflict > 0 || counts.missing > 0, 10000);
+			const resume = counts.missing > 0 || counts.cancelled > 0 ? " Sync the space again to resume: pages already pulled are skipped." : "";
+			this.report(`XWiki sync of "${root.join(".")}" finished: ${parts.join(", ")}.${resume}`, counts.conflict > 0 || counts.missing > 0, 10000);
 		} catch (error) {
 			notice.hide();
 			console.error("XWiki Publisher: space sync failed", error);

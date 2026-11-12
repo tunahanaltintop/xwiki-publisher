@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Resuming large syncs**: a space sync saves its progress every few seconds, including each downloaded attachment, so when it is interrupted (Obsidian closed, crashed or ran out of memory) syncing the space again skips the pages and files already pulled. Notes written by an interrupted sync before its progress was saved take over the attachment files already in the vault, instead of downloading them again as copies or becoming conflicts. Attachments that could not be downloaded are tried again on the next pull or sync, even when the page did not change. The sync result lists the pages that failed, with the reason. A folder publish saves its progress the same way.
+
 ## 1.5.0
 
 - **Deleted notes**: the *Source control* tab lists notes deleted from the vault with a red **D**. Selecting one and publishing deletes its XWiki page, after a confirmation that names the page, and removes the OpenProject links of the page. Pages changed on XWiki or not written in Markdown are kept unless you choose to overwrite them, and a page another note still belongs to is never offered. The **×** on the row keeps the page and removes the note from the list. Needs *delete* right on the page.

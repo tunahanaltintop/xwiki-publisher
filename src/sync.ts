@@ -45,6 +45,8 @@ export interface SyncRecord {
 	placedAt?: string;
 	/** Page the note was last synced with, kept so that the page can still be found once the note is deleted. */
 	reference?: string;
+	/** Attachments of the page that could not be downloaded at the last pull; the next pull or sync tries them again. */
+	missingAttachments?: string[];
 }
 
 export type SyncState = Record<string, SyncRecord>;
@@ -62,6 +64,8 @@ export interface SpaceSyncResult {
 	counts: Record<PullOutcome, number>;
 	/** Pages that are not written in Markdown and were converted from their rendered HTML. */
 	converted: number;
+	/** Pages that could not be pulled, with the reason. */
+	failures: string[];
 }
 
 export type PullOutcome = "created" | "updated" | "unchanged" | "conflict" | "missing" | "cancelled";
@@ -106,6 +110,9 @@ function sanitizeAttachmentName(name: string): string {
 	return name.replace(/[\\/:*?"<>|]/g, "-").trim() || "attachment";
 }
 
+/** During a long sync, the progress made so far is saved this often, so an interrupted sync resumes where it stopped. */
+const CHECKPOINT_MS = 10_000;
+
 function bodyHash(text: string): string {
 	return contentHash(stripFrontmatter(text).trim());
 }
@@ -114,6 +121,7 @@ export class SyncService {
 	/** While a space sync runs, saving is deferred to its end instead of rewriting the data file for every page. */
 	private batchDepth = 0;
 	private unsaved = false;
+	private lastSave = 0;
 
 	constructor(private readonly host: SyncHost) {}
 
@@ -131,7 +139,7 @@ export class SyncService {
 
 	/** Runs `task` with saving deferred; saves once at the end, also when the task fails or is cancelled. */
 	async batch<T>(task: () => Promise<T>): Promise<T> {
-		this.batchDepth++;
+		if (this.batchDepth++ === 0) this.lastSave = Date.now();
 		try {
 			return await task();
 		} finally {
@@ -145,6 +153,23 @@ export class SyncService {
 					console.error("XWiki Publisher: could not save the sync state", error);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Inside a batch, saves the changes made so far when the last save is a few seconds old. A sync that is
+	 * interrupted (Obsidian closed or crashed) then keeps the pages and attachments it already pulled, and the next
+	 * run skips them instead of downloading them again.
+	 */
+	async checkpoint(): Promise<void> {
+		if (this.batchDepth === 0 || !this.unsaved || Date.now() - this.lastSave < CHECKPOINT_MS) return;
+		this.unsaved = false;
+		this.lastSave = Date.now();
+		try {
+			await this.host.saveSettings();
+		} catch (error) {
+			this.unsaved = true;
+			console.error("XWiki Publisher: could not save the sync state", error);
 		}
 	}
 
@@ -190,7 +215,7 @@ export class SyncService {
 	 * Records that the note and the page at `location` agree, at the page's `version`. The location is given, not read
 	 * from the note, because the properties of a note that was just written are not in the metadata cache yet.
 	 */
-	async recordSync(file: TFile, version: string, location: PageLocation, placed = false): Promise<void> {
+	async recordSync(file: TFile, version: string, location: PageLocation, placed = false, missing?: string[]): Promise<void> {
 		const previous = this.host.syncState[file.path];
 		const reference = serializeReference(location);
 		this.dropDeleted(reference);
@@ -200,6 +225,8 @@ export class SyncService {
 			reference,
 			// Notes synced before placement was recorded count as placed where they are now.
 			placedAt: placed ? file.path : (previous?.placedAt ?? file.path),
+			// A publish does not download anything: it keeps the attachments still to fetch.
+			missingAttachments: missing === undefined ? previous?.missingAttachments : missing.length > 0 ? missing : undefined,
 		};
 		await this.save();
 	}
@@ -428,6 +455,7 @@ export class SyncService {
 	 * Downloads attachments of a page. A file downloaded earlier for the same page and name is updated in place, and
 	 * skipped when its XWiki version did not change; anything else gets a new file, so files of other notes that share
 	 * the name are never overwritten. Fills `links` with the link text of each saved file, by attachment name.
+	 * Returns the attachments that failed, and among them those worth trying again: the ones that exist on the page.
 	 */
 	private async downloadAttachments(
 		client: XWikiClient,
@@ -435,12 +463,14 @@ export class SyncService {
 		names: Set<string>,
 		notePath: string,
 		links: Map<string, string>,
-	): Promise<string[]> {
+	): Promise<{ failed: string[]; retry: string[] }> {
 		const failed: string[] = [];
-		if (names.size === 0) return failed;
+		if (names.size === 0) return { failed, retry: [] };
 		let remote: RemoteAttachment[] = [];
+		let listed = false;
 		try {
 			remote = await client.listAttachments(location);
+			listed = true;
 		} catch (error) {
 			console.debug("XWiki Publisher: could not list attachments, downloading all", error);
 		}
@@ -471,6 +501,10 @@ export class SyncService {
 						this.host.attachmentPaths[key] = file.path;
 					}
 					if (version) this.host.attachmentVersions[key] = version;
+					// Pages can have many large attachments: remember each download, so an interrupted sync does not
+					// download it again as a copy.
+					await this.save();
+					await this.checkpoint();
 				}
 				links.set(name, this.app.metadataCache.fileToLinktext(file, notePath, true));
 			} catch (error) {
@@ -478,7 +512,8 @@ export class SyncService {
 				failed.push(name);
 			}
 		}
-		return failed;
+		// A link to an attachment the page does not have fails every time; only the others are tried again.
+		return { failed, retry: listed ? failed.filter((name) => versions.has(name)) : failed };
 	}
 
 	private async writeMetadata(file: TFile, client: XWikiClient, location: PageLocation, remote: RemotePage, isNew: boolean): Promise<void> {
@@ -781,7 +816,10 @@ export class SyncService {
 			const expected = this.availablePath(await this.expectedPath(client, location, remote, options, existing), existing);
 			legacy.placedAt = expected === existing.path ? existing.path : "";
 		}
-		if (existing && this.host.syncState[existing.path]?.version === remote.version) {
+		const record = existing ? this.host.syncState[existing.path] : undefined;
+		// Attachments that failed last time are tried again, even when the page did not change.
+		const retry = record?.missingAttachments ?? [];
+		if (existing && record?.version === remote.version && retry.length === 0) {
 			await this.followLocation(existing, client, location, remote, options);
 			await this.relocateAttachments(client, location, existing);
 			return { outcome: "unchanged", converted: false };
@@ -790,6 +828,9 @@ export class SyncService {
 		const { source, converted } = await this.remoteMarkdown(client, location, remote);
 		const result = (outcome: PullOutcome): PullResult => ({ outcome, converted });
 
+		// A note without a record was written by a sync that was interrupted before it could save: take over the files
+		// already downloaded for it, so they are linked as before instead of downloaded again as copies.
+		if (existing && !record) await this.adoptLinkedAttachments(client, location, existing);
 		const path = existing?.path ?? this.availablePath(expected ?? (await this.expectedPath(client, location, remote, options)));
 		// Attachments already in the vault are linked right away; new ones once they are downloaded.
 		const links = new Map<string, string>();
@@ -799,7 +840,7 @@ export class SyncService {
 
 		if (existing) {
 			const local = await vault.read(existing);
-			if (stripFrontmatter(local).trim() === first.markdown.trim()) {
+			if (stripFrontmatter(local).trim() === first.markdown.trim() && retry.length === 0) {
 				await this.followLocation(existing, client, location, remote, options);
 				await this.writeMetadata(existing, client, location, remote, false);
 				await this.relocateAttachments(client, location, existing);
@@ -808,6 +849,15 @@ export class SyncService {
 			}
 			// Decide about conflicts before downloading anything, so the local note's files are never touched first.
 			if (this.isLocallyChanged(existing, local)) {
+				if (record?.version === remote.version) {
+					// Only attachments are missing and the page did not change: fetch them, and leave the edited note alone.
+					const { retry: still } = await this.downloadAttachments(client, location, new Set(retry), existing.path, new Map());
+					record.missingAttachments = still.length > 0 ? still : undefined;
+					await this.save();
+					await this.followLocation(existing, client, location, remote, options);
+					await this.relocateAttachments(client, location, existing);
+					return result("unchanged");
+				}
 				const action = options.interactive
 					? await choose(this.app, "Note changed locally", `"${existing.basename}" has local changes that are not on XWiki, and the XWiki page changed too.`, [
 							{ label: "Keep both", value: "copy" as const, cta: true },
@@ -825,7 +875,7 @@ export class SyncService {
 			}
 		}
 
-		const failed = await this.downloadAttachments(client, location, first.attachments, path, links);
+		const { failed, retry: missing } = await this.downloadAttachments(client, location, first.attachments, path, links);
 		if (failed.length > 0) new Notice(`Could not download from "${pageDisplayName(location)}": ${failed.join(", ")}`);
 		const { markdown } = convert();
 
@@ -843,7 +893,7 @@ export class SyncService {
 			await this.writeMetadata(file, client, location, remote, true);
 		}
 		await this.relocateAttachments(client, location, file);
-		await this.recordSync(file, remote.version, location, !existing);
+		await this.recordSync(file, remote.version, location, !existing, missing);
 		return result(existing ? "updated" : "created");
 	}
 
@@ -909,6 +959,7 @@ export class SyncService {
 			const chain = pageChain(location);
 			for (let k = 1; k < chain.length; k++) parents.add(serializeReference({ spaces: chain.slice(0, k), page: "WebHome" }));
 		}
+		const failures: string[] = [];
 		let done = 0;
 		for (const location of locations) {
 			if (isCancelled()) {
@@ -919,13 +970,16 @@ export class SyncService {
 			try {
 				const result = await this.pull(client, location, { interactive: false, index, titleCache, parents, claims });
 				counts[result.outcome]++;
+				if (result.outcome === "missing") failures.push(`${serializeReference(location)} (no longer on XWiki)`);
 				if (result.converted && (result.outcome === "created" || result.outcome === "updated")) converted++;
 			} catch (error) {
 				console.error(`XWiki Publisher: failed to pull ${serializeReference(location)}`, error);
 				counts.missing++;
+				failures.push(`${serializeReference(location)} (${error instanceof Error ? error.message : String(error)})`);
 			}
+			await this.checkpoint();
 		}
-		return { counts, converted };
+		return { counts, converted, failures };
 	}
 
 	/** Keeps sync records and attachment paths attached to files and folders that are renamed or moved. */
