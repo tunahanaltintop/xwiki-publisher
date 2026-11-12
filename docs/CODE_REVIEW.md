@@ -205,7 +205,7 @@ Folder notes eklentisine bağımlılık kaldırıldı; kullanılan özellikleri 
 
 | Sınırlama | Açıklama |
 | --- | --- |
-| Obsidian'a özgü sözdizimi | Vurgulama (`==metin==`), callout, blok referansı ve not gömme XWiki Markdown'da karşılıksızdır. |
+| Obsidian'a özgü sözdizimi | Callout, vurgulama, görev, dipnot, blok kimliği ve not gömme XWiki karşılıklarına yazılır (README → *Publishing*). Matematik (`$…$`) ve Mermaid ayrı XWiki eklentileri gerektirdiği için metin ve kod olarak kalır; katlanmış callout XWiki'de açık görünür. |
 | Markdown olmayan sayfaların dönüşümü | Kayıplıdır; makrolar çıktılarıyla (örneğin link olarak) gelir. HTML'den Markdown'a dönüşüm Obsidian'ın `htmlToMarkdown` fonksiyonuyla yapılır. |
 | Sayfa adresi biçimi | Yalnızca `/bin/view/…` ve `/bin/download/…` biçimi desteklenir. |
 | Solr gecikmesi | Yedek arama, indeks güncellenene kadar yeni sayfaları görmeyebilir. |
@@ -228,4 +228,5 @@ Folder notes eklentisine bağımlılık kaldırıldı; kullanılan özellikleri 
 - Yapıldı (1.1.0): `minAppVersion` 1.13.0'a yükseltildi ve ayar sekmesi `getSettingDefinitions` API'sine taşındı;
   ayarlar Obsidian'ın ayar aramasında görünüyor, lint uyarıları kapandı.
 - XWiki istemcisi için sahte (mock) `requestUrl` ile entegrasyon testleri eklenebilir.
-- Callout'ların (`> [!note]`) XWiki tarafında bilgi kutusuna dönüştürülmesi değerlendirilebilir.
+- Yapıldı: callout'lar (`> [!note]`) XWiki bilgi kutularına (`{{info}}`, `{{success}}`, `{{warning}}`, `{{error}}`)
+  dönüştürülüyor ve çekmede geri callout oluyor.

@@ -63,7 +63,7 @@ test("converts headings, formatting, lists and quotes", () => {
 		[
 			"## Başlık",
 			"",
-			"**kalın** *italik* altı çizili ~~üstü çizili~~ ^üst^ ~alt~  ",
+			"**kalın** *italik* <u>altı çizili</u> ~~üstü çizili~~ <sup>üst</sup> <sub>alt</sub>  ",
 			"https://example.com//path stays",
 			"",
 			"- bir",

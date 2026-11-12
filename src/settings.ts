@@ -3,6 +3,18 @@ import type XWikiPublisherPlugin from "./main";
 import type { FolderNoteLocation } from "./location";
 import type { AuthScheme } from "./xwiki-client";
 
+/** Single line breaks: as Obsidian shows them (its "Strict line breaks" setting), always, or never. */
+export type LineBreakMode = "obsidian" | "on" | "off";
+/** `%%comments%%` are removed on publish, or kept as `{{comment}}` macros. */
+export type CommentMode = "remove" | "macro";
+
+/** Whether single line breaks are line breaks: with "obsidian", unless Obsidian's "Strict line breaks" is on. */
+export function hardLineBreaks(settings: XWikiPublisherSettings, app: App): boolean {
+	if (settings.lineBreaks !== "obsidian") return settings.lineBreaks === "on";
+	const vault = app.vault as unknown as { getConfig?: (key: string) => unknown };
+	return vault.getConfig?.("strictLineBreaks") !== true;
+}
+
 export interface XWikiPublisherSettings {
 	baseUrl: string;
 	wiki: string;
@@ -17,6 +29,10 @@ export interface XWikiPublisherSettings {
 	createFolderPages: boolean;
 	nestedPages: boolean;
 	syntax: string;
+	/** How single line breaks inside paragraphs are published and pulled. */
+	lineBreaks: LineBreakMode;
+	/** What publishing does with `%%comments%%`. */
+	obsidianComments: CommentMode;
 	uploadAttachments: boolean;
 	writeUrlToFrontmatter: boolean;
 	/** Vault folder mirroring the XWiki page tree; empty for the vault root. */
@@ -56,6 +72,8 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	createFolderPages: true,
 	nestedPages: true,
 	syntax: "markdown/1.2",
+	lineBreaks: "obsidian",
+	obsidianComments: "remove",
 	uploadAttachments: true,
 	writeUrlToFrontmatter: true,
 	syncFolder: "",
@@ -301,6 +319,34 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 									settings.syntax = value.trim() || DEFAULT_SETTINGS.syntax;
 									void this.save();
 								}),
+							),
+					},
+					{
+						name: "Line breaks",
+						desc: "How single line breaks inside a paragraph are published. XWiki Markdown joins such lines with a space, while Obsidian shows them as line breaks unless Strict line breaks is on.",
+						build: (setting) =>
+							setting.addDropdown((dropdown) =>
+								dropdown
+									.addOptions({ obsidian: "Same as Obsidian", on: "Always line breaks", off: "Never (join lines)" })
+									.setValue(settings.lineBreaks)
+									.onChange((value) => {
+										settings.lineBreaks = value as LineBreakMode;
+										void this.save();
+									}),
+							),
+					},
+					{
+						name: "Obsidian comments",
+						desc: "Remove %%comments%% from published pages, or keep them as hidden {{comment}} macros: not shown on the page, but visible in its source to anyone who can edit it, and kept when the page is pulled back.",
+						build: (setting) =>
+							setting.addDropdown((dropdown) =>
+								dropdown
+									.addOptions({ remove: "Remove", macro: "Keep hidden in the page source" })
+									.setValue(settings.obsidianComments)
+									.onChange((value) => {
+										settings.obsidianComments = value as CommentMode;
+										void this.save();
+									}),
 							),
 					},
 					{

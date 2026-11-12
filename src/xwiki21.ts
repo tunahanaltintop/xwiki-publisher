@@ -214,11 +214,12 @@ function inline(text: string): string {
 		// Parameters such as (% class="x" %) have no Markdown equivalent.
 		.replace(/\(%[\s\S]*?%\)/g, "")
 		.replace(/\/\/(?=\S)([\s\S]*?\S)\/\//g, "*$1*")
-		.replace(/__(?=\S)([\s\S]*?\S)__/g, "$1")
+		// Obsidian has no underline, subscript or superscript syntax but renders these HTML tags; publishing keeps them.
+		.replace(/__(?=\S)([\s\S]*?\S)__/g, "<u>$1</u>")
 		.replace(/--(?=\S)([^\n]*?\S)--/g, "~~$1~~")
 		.replace(/##(?=\S)([^\n]*?\S)##/g, (_m, code: string) => keep.add(codeSpan(code)))
-		.replace(/\^\^(?=\S)([^\n]*?\S)\^\^/g, "^$1^")
-		.replace(/,,(?=\S)([^\n]*?\S),,/g, "~$1~")
+		.replace(/\^\^(?=\S)([^\n]*?\S)\^\^/g, "<sup>$1</sup>")
+		.replace(/,,(?=\S)([^\n]*?\S),,/g, "<sub>$1</sub>")
 		.replace(/\\\\/g, "  \n");
 
 	return keep.restore(out);

@@ -204,6 +204,14 @@ export function serializeReference(location: PageLocation): string {
 	return [...location.spaces, location.page].map(escapeName).join(".");
 }
 
+/**
+ * Serialises a location as a document reference to write in page content (links, macros): like
+ * `serializeReference`, with `:` escaped too, since XWiki would read the text before it as a wiki name.
+ */
+export function contentReference(location: PageLocation): string {
+	return [...location.spaces, location.page].map((name) => escapeName(name).replace(/:/g, "\\:")).join(".");
+}
+
 /** Parses `Space.Sub.Page`; a single name is treated as the nested page `Name.WebHome`. */
 export function parseReference(reference: string): PageLocation | null {
 	const parts = splitSpaceReference(reference);
@@ -313,7 +321,9 @@ const REFERENCE_TYPES = new Set(["doc", "page", "space", "attach", "url", "path"
 /** Candidate pages for a document reference, relative to the page it appears on. */
 function documentCandidates(reference: string, current: PageLocation): PageLocation[] {
 	// Drop a wiki prefix such as "xwiki:".
-	const local = /^[^.:]+:/.test(reference) ? reference.slice(reference.indexOf(":") + 1) : reference;
+	// An escaped colon ("ADR-001\: Title") is part of a name, not the end of a wiki name.
+	const wiki = /^(?:[^.:\\]|\\.)+:/.exec(reference);
+	const local = wiki ? reference.slice(wiki[0].length) : reference;
 	const parts = splitSpaceReference(local);
 	if (parts.length === 0) return [current];
 	if (parts.length === 1) {

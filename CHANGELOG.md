@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Obsidian syntax on XWiki**: callouts become message boxes (`{{info}}`, `{{success}}`, `{{warning}}`, `{{error}}`) with their title, highlights become `<mark>`, task lists get ☐/☑/☒, footnotes become `{{footnote}}` macros, block ids become `{{id}}` anchors, embedded notes and sections are shown with `{{display}}`, and sized images (`![[a.png|300]]`) keep their size. Characters that XWiki Markdown would read as subscript, superscript, definitions or abbreviations are escaped. Pulling turns all of them back into the Obsidian syntax.
+- **Links as XWiki references**: page links and attachments are written as XWiki references (`[[label|doc:Space.Note.WebHome]]`, `![[alt|a.png]]`) instead of URLs, so XWiki tracks them and updates them on renames. Links to headings and blocks (`[[Note#Heading]]`, `[[#Heading]]`, `[[Note#^block]]`) now point at the heading or block, with the anchor XWiki generates, and come back unchanged on pull; before, the heading was dropped and the pulled link got a `Note > Heading` alias.
+- **Line breaks**: single line breaks are published as line breaks when Obsidian shows them so (setting *Line breaks*); XWiki Markdown joined such lines into one.
+- **Comments**: new setting *Obsidian comments* to keep `%%comments%%` as hidden `{{comment}}` macros, so they survive a pull after an edit on XWiki.
+- Pages in XWiki syntax: underline, superscript and subscript are pulled as `<u>`, `<sup>` and `<sub>` instead of being dropped or written in a syntax Obsidian does not show.
+
 ## 1.6.0
 
 - **Resuming large syncs**: a space sync saves its progress every few seconds, including each downloaded attachment, so when it is interrupted (Obsidian closed, crashed or ran out of memory) syncing the space again skips the pages and files already pulled. Notes written by an interrupted sync before its progress was saved take over the attachment files already in the vault, instead of downloading them again as copies or becoming conflicts. Attachments that could not be downloaded are tried again on the next pull or sync, even when the page did not change. The sync result lists the pages that failed, with the reason. A folder publish saves its progress the same way.
