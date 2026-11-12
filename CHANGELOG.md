@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.0
 
 - **Resuming large syncs**: a space sync saves its progress every few seconds, including each downloaded attachment, so when it is interrupted (Obsidian closed, crashed or ran out of memory) syncing the space again skips the pages and files already pulled. Notes written by an interrupted sync before its progress was saved take over the attachment files already in the vault, instead of downloading them again as copies or becoming conflicts. Attachments that could not be downloaded are tried again on the next pull or sync, even when the page did not change. The sync result lists the pages that failed, with the reason. A folder publish saves its progress the same way.
 
