@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Highlight colours**: Obsidian's coloured highlights (`==🟢text==`) are published in their colour, without the emoji, and come back unchanged on pull. Before, XWiki showed the default highlight with the emoji in the text.
+
 ## 1.7.0
 
 - **Obsidian syntax on XWiki**: callouts become message boxes (`{{info}}`, `{{success}}`, `{{warning}}`, `{{error}}`) with their title, highlights become `<mark>`, task lists get ☐/☑/☒, footnotes become `{{footnote}}` macros, block ids become `{{id}}` anchors, embedded notes and sections are shown with `{{display}}`, and sized images (`![[a.png|300]]`) keep their size. Characters that XWiki Markdown would read as subscript, superscript, definitions or abbreviations are escaped. Pulling turns all of them back into the Obsidian syntax.

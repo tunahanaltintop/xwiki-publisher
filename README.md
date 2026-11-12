@@ -149,6 +149,7 @@ The page title is the note name, or the `xwiki-title` property when set.
 | `![[Note]]`, `![[Note#Heading]]` | `{{display reference="Space.Note.WebHome" section="HHeading"/}}`: the page or section is shown in place |
 | `> [!tip] Title` callouts | Message boxes: `{{info}}`, `{{success}}`, `{{warning}}` or `{{error}}` with the title; the box content stays Markdown |
 | `==highlight==` | `<mark>highlight</mark>` |
+| `==🟢highlight==` (Obsidian's highlight colours: 🔴🟠🟡🟢🔵🟣, or the squares 🟥🟧🟨🟩🟦🟪) | `<mark class="obsidian-highlight-green" style="background-color: …">highlight</mark>`: the colour is shown on XWiki without the emoji |
 | `- [ ]`, `- [x]`, `- [X]` | `- ☐`, `- ☑`, `- ☒` |
 | `[^1]` footnotes, `^[inline footnotes]` | `{{footnote}}…{{/footnote}}`, listed at the end of the page |
 | `text ^block-id` | `text {{id name="block-id"/}}`, an anchor links can target |

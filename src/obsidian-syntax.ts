@@ -336,14 +336,53 @@ export function tasksFromSymbols(text: string): string {
 	return text.replace(/^(\s*(?:[-*+]|\d+[.)])[ \t]+)([☐☑☒])(?=[ \t]|$)/gm, (_m, marker: string, symbol: string) => `${marker}[${TASK_MARKS[symbol]}]`);
 }
 
-/** `==text==` becomes `<mark>`, which Markdown 1.2 turns into an inline HTML macro. */
+/**
+ * Obsidian's highlight colours: the colour is an emoji at the start of the highlight (`==🟢text==`), which Obsidian
+ * hides. Its menu writes circles; squares are read as the same colours. The background is Obsidian's light-theme
+ * colour at its highlight opacity (30%).
+ */
+const HIGHLIGHT_RGB: Record<string, string> = {
+	red: "233, 49, 71",
+	orange: "236, 117, 0",
+	yellow: "224, 172, 0",
+	green: "8, 185, 78",
+	blue: "8, 109, 221",
+	purple: "120, 82, 238",
+};
+const CIRCLES = ["🔴", "🟠", "🟡", "🟢", "🔵", "🟣"];
+const SQUARES = ["🟥", "🟧", "🟨", "🟩", "🟦", "🟪"];
+/** Emoji → class suffix; squares get their own suffix so they come back as squares. */
+const HIGHLIGHT_CLASSES: Record<string, string> = Object.fromEntries(
+	Object.keys(HIGHLIGHT_RGB).flatMap((color, i) => [
+		[CIRCLES[i], color],
+		[SQUARES[i], `${color}-square`],
+	]),
+);
+const HIGHLIGHT_EMOJI = Object.fromEntries(Object.entries(HIGHLIGHT_CLASSES).map(([emoji, name]) => [name, emoji]));
+const HIGHLIGHT_PREFIX = "obsidian-highlight-";
+
+/**
+ * `==text==` becomes `<mark>`, which Markdown 1.2 turns into an inline HTML macro. A coloured highlight (`==🟢text==`)
+ * gets its colour as a class, for the way back, and as an inline style, so XWiki shows it without extra CSS.
+ */
 export function highlightsToHtml(text: string): string {
 	// No lookbehind: it is a syntax error on iOS before 16.4.
-	return text.replace(/(^|[^=])==(?![=\s])([^\n]*?[^=\s])==(?!=)/gm, "$1<mark>$2</mark>");
+	return text.replace(/(^|[^=])==(?![=\s])([^\n]*?[^=\s])==(?!=)/gm, (_m, before: string, inner: string) => {
+		const emoji = Object.keys(HIGHLIGHT_CLASSES).find((key) => inner.startsWith(key) && inner.length > key.length);
+		if (!emoji) return `${before}<mark>${inner}</mark>`;
+		const name = HIGHLIGHT_CLASSES[emoji];
+		const rgb = HIGHLIGHT_RGB[name.replace(/-square$/, "")];
+		return `${before}<mark class="${HIGHLIGHT_PREFIX}${name}" style="background-color: rgba(${rgb}, 0.3)">${inner.slice(emoji.length)}</mark>`;
+	});
 }
 
 export function highlightsFromHtml(text: string): string {
-	return text.replace(/<mark>([^\n]*?)<\/mark>/g, "==$1==");
+	return text
+		.replace(/<mark class="obsidian-highlight-([a-z-]+)"[^>\n]*>([^\n]*?)<\/mark>/g, (match, name: string, inner: string) => {
+			const emoji = HIGHLIGHT_EMOJI[name];
+			return emoji ? `==${emoji}${inner}==` : match;
+		})
+		.replace(/<mark>([^\n]*?)<\/mark>/g, "==$1==");
 }
 
 /** Obsidian comments are removed, or kept as `{{comment}}` macros, hidden on the page but kept in its source. */

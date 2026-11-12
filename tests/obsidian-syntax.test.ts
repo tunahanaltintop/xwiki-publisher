@@ -52,6 +52,17 @@ const ROUND_TRIPS: [string, string, string][] = [
 	["nested callout", "> [!note] Dış\n> metin\n> > [!bug] İç\n> > hata", '{{info title="Dış" cssClass="obsidian-callout-note"}}\nmetin\n{{error title="İç" cssClass="obsidian-callout-bug"}}\nhata\n{{/error}}\n{{/info}}'],
 	["callout with code", "> [!note] Kod\n> ```js\n> a~b [[Other]]\n> ```", '{{info title="Kod" cssClass="obsidian-callout-note"}}\n```js\na~b [[Other]]\n```\n{{/info}}'],
 	["highlight", "Bu ==önemli== bir cümle.", "Bu <mark>önemli</mark> bir cümle."],
+	[
+		"coloured highlights",
+		"==🟢Bu not== ve ==🔴acil iş==, ==🟣mor==",
+		'<mark class="obsidian-highlight-green" style="background-color: rgba(8, 185, 78, 0.3)">Bu not</mark> ve <mark class="obsidian-highlight-red" style="background-color: rgba(233, 49, 71, 0.3)">acil iş</mark>, <mark class="obsidian-highlight-purple" style="background-color: rgba(120, 82, 238, 0.3)">mor</mark>',
+	],
+	[
+		"square-coloured highlight",
+		"==🟦mavi kare==",
+		'<mark class="obsidian-highlight-blue-square" style="background-color: rgba(8, 109, 221, 0.3)">mavi kare</mark>',
+	],
+	["highlight of an emoji that is not a colour", "==⚫siyah== ve ==🟢==", "<mark>⚫siyah</mark> ve <mark>🟢</mark>"],
 	["task list", "- [ ] yapılacak\n- [x] bitti\n- [X] iptal", "- ☐ yapılacak\n- ☑ bitti\n- ☒ iptal"],
 	["footnote", "Metin[^1] ve devamı[^2].\n\n[^1]: Birinci not.\n[^2]: İkinci [[Other]] notu.", "Metin{{footnote}}Birinci not.{{/footnote}} ve devamı{{footnote}}İkinci [[Other|doc:S.Other.WebHome]] notu.{{/footnote}}."],
 	["single line breaks", "Satır bir\nSatır iki\n\n- madde\n  devamı", "Satır bir  \nSatır iki\n\n- madde  \n  devamı"],
