@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0
 
 - **Obsidian syntax on XWiki**: callouts become message boxes (`{{info}}`, `{{success}}`, `{{warning}}`, `{{error}}`) with their title, highlights become `<mark>`, task lists get ☐/☑/☒, footnotes become `{{footnote}}` macros, block ids become `{{id}}` anchors, embedded notes and sections are shown with `{{display}}`, and sized images (`![[a.png|300]]`) keep their size. Characters that XWiki Markdown would read as subscript, superscript, definitions or abbreviations are escaped. Pulling turns all of them back into the Obsidian syntax.
 - **Links as XWiki references**: page links and attachments are written as XWiki references (`[[label|doc:Space.Note.WebHome]]`, `![[alt|a.png]]`) instead of URLs, so XWiki tracks them and updates them on renames. Links to headings and blocks (`[[Note#Heading]]`, `[[#Heading]]`, `[[Note#^block]]`) now point at the heading or block, with the anchor XWiki generates, and come back unchanged on pull; before, the heading was dropped and the pulled link got a `Note > Heading` alias.

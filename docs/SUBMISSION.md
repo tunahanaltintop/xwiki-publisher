@@ -21,8 +21,8 @@ XWiki tarafında yapılması gerekenler ayrı bir belgededir: [XWIKI_SETUP.md](X
 | --- | --- |
 | Dizin sayfası | https://community.obsidian.md/plugins/xwiki-publisher |
 | Depo | https://github.com/tunahanaltintop/xwiki-publisher (herkese açık, MIT) |
-| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0`, `1.2.1`, `1.3.0`, `1.4.0`, `1.4.1`, `1.5.0`, `1.6.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
-| Son sürümler | `1.3.0`: klasör yayınlama; `1.4.0`: paneldeki *Source control* sekmesi ve seçili değişikliklerin toplu yayınlanması; `1.4.1`: CSS uyumluluk düzeltmesi; `1.5.0`: OpenProject bağlantıları ve silinen notların sayfalarının *Source control* sekmesinden silinmesi; `1.6.0`: yarıda kalan büyük senkronların kaldığı yerden devam etmesi |
+| Yayınlanan sürümler | `1.0.0`, `1.0.1`, `1.1.0`, `1.2.0`, `1.2.1`, `1.3.0`, `1.4.0`, `1.4.1`, `1.5.0`, `1.6.0`, `1.7.0` (1.1.0'dan itibaren en düşük Obsidian sürümü 1.13.0) |
+| Son sürümler | `1.3.0`: klasör yayınlama; `1.4.0`: paneldeki *Source control* sekmesi ve seçili değişikliklerin toplu yayınlanması; `1.4.1`: CSS uyumluluk düzeltmesi; `1.5.0`: OpenProject bağlantıları ve silinen notların sayfalarının *Source control* sekmesinden silinmesi; `1.6.0`: yarıda kalan büyük senkronların kaldığı yerden devam etmesi; `1.7.0`: Obsidian'a özgü sözdiziminin (callout, vurgu, görev, dipnot, gömme, başlık bağlantıları) XWiki karşılıklarıyla yayınlanması |
 | Otomatik inceleme | Hata ve uyarı yok; `1.1.0` ile son tavsiyeler de giderildi (bkz. §8). |
 
 İlk gönderim tamamlandı; §0–§7 o sürecin kaydıdır. Yeni bir sürüm için yalnızca **§9 Yeni sürüm yayınlama** adımları
