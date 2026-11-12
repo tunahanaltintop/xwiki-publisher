@@ -46,15 +46,13 @@ geliştirildiği için yayınlamadan önce:
   git grep -niE "<kurum-alan-adi>|bearer [a-z0-9]" -- . ':!package-lock.json'
   ```
 
-- `.env` dosyası (yerel test vault yolu) `.gitignore` içindedir; depoya girmemelidir.
-
 ## 1. Gerekenler
 
 | Gereken | Açıklama |
 | --- | --- |
 | GitHub hesabı | Kaynak kod ve release'ler burada tutulur. Obsidian, kullanıcılara dosyaları GitHub release'inden indirir. |
 | Obsidian hesabı | community.obsidian.md'de oturum açmak için. |
-| Node.js 22.9 veya üstü | `npm run build` betiği `--env-file-if-exists` seçeneğini kullanır. |
+| Node.js 22.6 veya üstü | `npm test` TypeScript testlerini `--experimental-strip-types` seçeneğiyle çalıştırır. |
 
 ## 2. Yazar bilgileri
 
@@ -292,7 +290,7 @@ Eklenti dizinde olduğu için yeni sürümlerde yeniden gönderim gerekmez; yeni
 1. **Değişiklikleri hazırlayın:** `CHANGELOG.md` dosyasına yeni sürümün notlarını ekleyin, README ve `docs/`
    belgelerini güncelleyin.
 2. **Kontroller:** `npm run lint` (0 hata, 0 uyarı), `npm test` ve `npm run build` temiz geçmeli. §10'daki manuel
-   testlerden değişikliği ilgilendirenleri Test vault'unda çalıştırın.
+   testlerden değişikliği ilgilendirenleri bir test vault'unda çalıştırın.
 3. **Sürüm:** Hata düzeltmesi için `npm version patch`, yeni özellik için `npm version minor`, uyumsuz değişiklik için
    `npm version major`. Komut `manifest.json` ve `versions.json` dosyalarını günceller, commit'ler ve `v` öneki
    olmadan etiket oluşturur. `minAppVersion` değişecekse önce `manifest.json` içinde değiştirin.
