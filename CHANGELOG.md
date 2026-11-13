@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.8.0
 
 - **Highlight colours**: Obsidian's coloured highlights (`==🟢text==`) are published in their colour, without the emoji, and come back unchanged on pull. Before, XWiki showed the default highlight with the emoji in the text.
+- **Links to formatted headings**: links and section embeds pointing at a formatted heading (`## **Scope**`) come back on pull as `[[Note#Scope]]`. Before, they came back with the Markdown marks and an extra alias (`[[Note#**Scope**|Note > Scope]]`).
 
 ## 1.7.0
 
