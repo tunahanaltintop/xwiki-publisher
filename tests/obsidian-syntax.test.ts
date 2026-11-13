@@ -128,3 +128,14 @@ test("a macro closed after a code block is not escaped, tags inside code are lef
 test("escapes written as backslashes by earlier builds or the XWiki editor are read back too", () => {
 	assert.equal(pull("a \\~b\\~ 2\\^3 \\{{title}}\n\\: x"), "a ~b~ 2^3 {{title}}\n: x\n");
 });
+
+test("links to formatted headings come back without the formatting", () => {
+	const bold: LinkResolver = () => ({ kind: "page", url: "https://w/bin/view/S/Other/", reference: OTHER, headings: ["**1.1 Amaç**"] });
+	const back: ReverseResolver = (target) =>
+		target.startsWith(XWIKI_LINK) ? { kind: "note", linktext: "Other", basename: "Other", headings: ["**1.1 Amaç**"], blocks: [] } : null;
+	for (const note of ["[[Other#1.1 Amaç]]", "[[Other#1.1 Amaç|kapsam]]", "![[Other#1.1 Amaç]]"]) {
+		const published = convertNote(note, bold, { xwikiReferences: true }).markdown;
+		assert.match(published, /H1\.1AmaE7/);
+		assert.equal(convertFromXWiki(published, back).markdown, `${note}\n`);
+	}
+});
