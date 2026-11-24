@@ -397,6 +397,23 @@ export function commentsFromMacros(text: string): string {
 	return text.replace(/\{\{comment\}\}([\s\S]*?)\{\{\/comment\}\}/g, "%%$1%%");
 }
 
+/** Start of the footnote ids that stand for the inline comments of a page: `[^xwiki-3]` is its comment 3. */
+export const COMMENT_REFERENCE = "[^xwiki-";
+
+/**
+ * Removes what a pull writes into a note to show the inline comments of its page (see `inline-comments.ts`): the
+ * reference after the commented text, the `==💬…==` highlight around that text (`==✅…==` for a resolved comment), the line of references to the
+ * comments that have no place in the text, and the footnotes holding the comments. None of it is page content.
+ */
+export function stripCommentMarks(text: string): string {
+	return text
+		.replace(/^[ \t]*💬(?:\[\^xwiki-\d+\])+[ \t]*$\n?/gmu, "")
+		.replace(/^\[\^xwiki-\d+\]:.*(?:\n(?: {2,}|\t)\S.*)*\n?/gm, "")
+		// A highlight left without its reference is the note's own: only the text up to the next `==` is looked at.
+		.replace(/==(?:💬|✅)((?:(?!==)[^\n])*)==(?=\[\^xwiki-\d+\])/gu, "$1")
+		.replace(/\[\^xwiki-\d+\]/g, "");
+}
+
 /* ------------------------------------------------------------------------------------------------ Escapes */
 
 /** Syntax whose text must not be escaped: macro tags, links, images, HTML tags and URLs. */

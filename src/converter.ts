@@ -7,6 +7,7 @@ import {
 	anchorFor,
 	blockIdsToMacros,
 	calloutsToMacros,
+	COMMENT_REFERENCE,
 	convertComments,
 	escapeMarkdown12,
 	escapeUnclosedMacros,
@@ -15,8 +16,10 @@ import {
 	footnotesToMacros,
 	hardenLineBreaks,
 	highlightsToHtml,
+	stripCommentMarks,
 	tasksToSymbols,
 } from "./obsidian-syntax.ts";
+import { linksToMentions } from "./mentions.ts";
 
 export type ResolvedLink =
 	| { kind: "attachment"; vaultPath: string; name: string; url: string }
@@ -42,6 +45,11 @@ export interface ConvertOptions {
 	 * instead of URLs, so XWiki tracks them as links, updates them on renames and does not depend on its URL scheme.
 	 */
 	xwikiReferences?: boolean;
+	/**
+	 * Address of the XWiki: links to the profiles of its users whose text starts with `@` are written as mention
+	 * macros (see `mentions.ts`).
+	 */
+	mentions?: { baseUrl: string };
 }
 
 export interface ConvertResult {
@@ -377,16 +385,29 @@ function acrossCode(markdown: string, transform: (text: string) => string): stri
 }
 
 /**
+ * Removes the inline comments of the XWiki page that a pull wrote into a note (see `inline-comments.ts`), so that
+ * they are neither published nor counted as an edit of the note. Code is left untouched.
+ */
+export function stripInlineComments(markdown: string): string {
+	return markdown.includes(COMMENT_REFERENCE) ? transformOutsideCode(markdown, stripCommentMarks) : markdown;
+}
+
+/**
  * Converts a whole note (frontmatter included) into XWiki Markdown. Code is left untouched. Obsidian-only syntax is
  * written as XWiki constructs that `convertFromXWiki` turns back into the same syntax (see `obsidian-syntax.ts`).
  */
 export function convertNote(content: string, resolve: LinkResolver, options: ConvertOptions = {}): ConvertResult {
 	const ctx: ConvertContext = { resolve, attachments: new Map(), headings: [], references: options.xwikiReferences ?? false };
-	const body = stripFrontmatter(content);
+	// The comments of the page live on XWiki, next to its content: what a pull shows of them is not published.
+	const body = stripInlineComments(stripFrontmatter(content));
 	ctx.headings = extractHeadings(body);
 	const footnotes = new Map<string, string>();
 	// Callouts first, on the whole note: fenced code inside a callout becomes fenced code inside its box.
-	const boxed = calloutsToMacros(transformOutsideCode(body, (text) => convertComments(text, options.comments ?? "remove")));
+	const uncommented = transformOutsideCode(body, (text) => convertComments(text, options.comments ?? "remove"));
+	// Mentions on the whole note at once: each one written in Obsidian gets an anchor that no other mention has.
+	const baseUrl = options.mentions?.baseUrl;
+	const mentioned = baseUrl ? acrossCode(uncommented, (text) => linksToMentions(text, baseUrl)) : uncommented;
+	const boxed = calloutsToMacros(mentioned);
 	const safe = acrossCode(boxed, escapeUnclosedMacros);
 	const withoutDefinitions = transformOutsideCode(safe, (text) => extractFootnotes(text, footnotes));
 	const markdown = transformOutsideCode(withoutDefinitions, (text) => {

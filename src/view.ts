@@ -1,21 +1,48 @@
-import { ButtonComponent, debounce, ItemView, Keymap, setIcon, Setting, setTooltip, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
+import { ButtonComponent, debounce, ItemView, Keymap, Menu, setIcon, Setting, setTooltip, TFile, ViewStateResult, WorkspaceLeaf } from "obsidian";
 import { noteBasename } from "./deletions";
 import { FM_PAGE, FM_REFERENCE, FM_SPACE, FM_SYNTAX, FM_TITLE, FM_URL, folderForNote, pageDisplayName } from "./location";
 import type XWikiPublisherPlugin from "./main";
-import type { NoteChange } from "./main";
+import type { IncomingChange, NoteChange } from "./main";
 
 export const VIEW_TYPE_XWIKI = "xwiki-publisher-panel";
 
 type PanelTab = "actions" | "changes";
 
-/** A vault folder in the folder view of the source control tab, with the changed notes below it. */
-interface ChangeFolder {
+/** A row of a list of the source control tab: a note, or a deleted one. */
+interface Item {
+	path: string;
+	file: TFile | null;
+}
+
+/** A vault folder in the folder view of the source control tab, with the listed notes below it. */
+interface ChangeFolder<T extends Item> {
 	name: string;
 	path: string;
-	folders: Map<string, ChangeFolder>;
-	changes: NoteChange[];
-	/** The folder's own folder note, when it changed: shown on the folder's row, not as a note below it. */
-	note?: NoteChange;
+	folders: Map<string, ChangeFolder<T>>;
+	changes: T[];
+	/** The folder's own folder note, when it is listed: shown on the folder's row, not as a note below it. */
+	note?: T;
+}
+
+/**
+ * One list of the source control tab, shown as a tree: the notes to publish (outgoing) or the notes to pull
+ * (incoming). Each has its own selection and its own collapsed rows.
+ */
+interface Section<T extends Item> {
+	/** Prefix of the keys of its collapsed rows. */
+	key: string;
+	selected: Set<string>;
+	/** Whether the item can be selected: a page that is gone has nothing to pull. */
+	selectable(item: T): boolean;
+	/** The status letter of the item, and its buttons, at the end of its row. */
+	mark(row: HTMLElement, item: T): void;
+	tooltip(item: T): string;
+	/** The name of the item is struck through. */
+	struck(item: T): boolean;
+	/** Compares the item with its page, older version on the left. */
+	compare(item: T): void;
+	/** Undoes the change of the item, if the list allows it. */
+	revert?: (item: T) => void;
 }
 
 const STATUS_LETTER: Record<NoteChange["status"], string> = { added: "A", modified: "M", deleted: "D" };
@@ -24,6 +51,25 @@ const STATUS_TOOLTIP: Record<NoteChange["status"], string> = {
 	modified: "Modified since the last publish or pull",
 	deleted: "Deleted: publishing deletes its XWiki page",
 };
+
+const INCOMING_LETTER: Record<IncomingChange["state"]["status"], string> = { updated: "U", conflict: "C", missing: "R" };
+
+function incomingTooltip(change: IncomingChange): string {
+	const state = change.state;
+	const versions = `version ${change.version} → ${change.remoteVersion ?? "?"}`;
+	if (state.status === "missing") return "Removed: the page is no longer on XWiki, or you cannot see it. Nothing to pull.";
+	if (state.status === "conflict") return `Changed on XWiki (${versions}) and edited in the vault: pulling asks whether to keep both or overwrite the note`;
+	switch (state.reason) {
+		case "content":
+			return `Updated on XWiki: ${versions}`;
+		case "comments":
+			return `New comments or attachments on XWiki (${versions}); the text of the page is the same`;
+		case "format":
+			return "Pulling shows its mentions as links; the page did not change";
+		case "attachments":
+			return "Attachments that could not be downloaded at the last pull";
+	}
+}
 
 function parentPath(path: string): string {
 	return path.slice(0, Math.max(path.lastIndexOf("/"), 0));
@@ -57,8 +103,37 @@ export class XWikiPanelView extends ItemView {
 	private scanId = 0;
 	/** Paths of the notes selected for publishing. */
 	private readonly selected = new Set<string>();
-	/** Collapsed rows of the source control tree: folder paths, and "" for the Changes root. */
+	/** Paths of the notes selected for pulling. */
+	private readonly selectedIncoming = new Set<string>();
+	/** Collapsed rows of the source control trees: the key of a list followed by a folder path, or alone for its root. */
 	private readonly collapsed = new Set<string>();
+	private readonly outgoing: Section<NoteChange> = {
+		key: "out:",
+		selected: this.selected,
+		selectable: () => true,
+		mark: (row, change) => this.changeMark(row, change),
+		tooltip: changeTooltip,
+		struck: (change) => change.status === "deleted",
+		// What publishing would change on XWiki: the page is the old version.
+		compare: (change) =>
+			void this.plugin.showDifferences("outgoing", change.file, change.file ? this.plugin.locate(change.file) : change.note.location, noteBasename(change.path), () =>
+				this.plugin.revertChange(change),
+			),
+		revert: (change) => void this.plugin.revertChange(change),
+	};
+	private readonly incomingSection: Section<IncomingChange> = {
+		key: "in:",
+		selected: this.selectedIncoming,
+		selectable: (change) => change.state.status !== "missing",
+		mark: (row, change) => {
+			const badge = row.createSpan({ cls: `xwiki-change-status mod-incoming-${change.state.status}`, text: INCOMING_LETTER[change.state.status] });
+			setTooltip(badge, incomingTooltip(change));
+		},
+		tooltip: (change) => `${change.path}\n${incomingTooltip(change)}`,
+		struck: (change) => change.state.status === "missing",
+		// What pulling would change in the vault: the note is the old version.
+		compare: (change) => void this.plugin.showDifferences("incoming", change.file, this.plugin.locate(change.file), noteBasename(change.path)),
+	};
 	private readonly requestScan = debounce(
 		() => {
 			this.changesStale = true;
@@ -116,6 +191,7 @@ export class XWikiPanelView extends ItemView {
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
 				if (this.selected.delete(oldPath)) this.selected.add(file.path);
+				if (this.selectedIncoming.delete(oldPath)) this.selectedIncoming.add(file.path);
 				if (file === this.file) this.requestRender();
 				this.requestScan();
 			}),
@@ -233,56 +309,63 @@ export class XWikiPanelView extends ItemView {
 		tab("changes", "Source control", "git-compare");
 	}
 
-	/** Selects or deselects the notes at `paths`, and shows the new selection. */
-	private select(paths: string[], selected: boolean): void {
+	/** Selects or deselects the notes at `paths` in a list, and shows the new selection. */
+	private select<T extends Item>(section: Section<T>, paths: string[], selected: boolean): void {
 		for (const path of paths) {
-			if (selected) this.selected.add(path);
-			else this.selected.delete(path);
+			if (selected) section.selected.add(path);
+			else section.selected.delete(path);
 		}
 		this.render();
 	}
 
 	/** Shows whether all, some (indeterminate) or none of the notes at `paths` are selected. */
-	private selectionBox(parent: HTMLElement, paths: string[], label: string): HTMLInputElement {
+	private selectionBox<T extends Item>(section: Section<T>, parent: HTMLElement, paths: string[], label: string): HTMLInputElement {
 		const box = parent.createEl("input", { type: "checkbox", cls: "xwiki-change-check" });
-		const count = paths.filter((path) => this.selected.has(path)).length;
+		const count = paths.filter((path) => section.selected.has(path)).length;
 		box.checked = count > 0 && count === paths.length;
 		box.indeterminate = count > 0 && count < paths.length;
 		box.disabled = paths.length === 0;
 		box.setAttr("aria-label", label);
 		box.addEventListener("click", (event) => event.stopPropagation());
-		box.addEventListener("change", () => this.select(paths, box.checked));
+		box.addEventListener("change", () => this.select(section, paths, box.checked));
 		return box;
 	}
 
+	/** A toolbar button showing only an icon. */
+	private iconButton(parent: HTMLElement, icon: string, tooltip: string, onClick: () => void, active?: boolean): void {
+		const button = parent.createDiv({ cls: "clickable-icon" });
+		setIcon(button, icon);
+		setTooltip(button, tooltip);
+		button.setAttr("aria-label", tooltip);
+		if (active !== undefined) {
+			button.toggleClass("is-active", active);
+			button.setAttr("aria-pressed", String(active));
+		}
+		button.addEventListener("click", onClick);
+	}
+
 	private renderChanges(el: HTMLElement): void {
+		this.renderOutgoing(el);
+		this.renderIncoming(el);
+	}
+
+	/** The notes to publish: added, modified and deleted in the vault since their last sync. */
+	private renderOutgoing(el: HTMLElement): void {
 		const changes = this.changes ?? [];
-		const paths = changes.map((change) => change.path);
 		const selected = changes.filter((change) => this.selected.has(change.path));
 
 		const toolbar = el.createDiv({ cls: "xwiki-changes-toolbar" });
 		const all = toolbar.createEl("label", { cls: "xwiki-changes-select-all" });
-		this.selectionBox(all, paths, "Select all changes");
+		this.selectionBox(this.outgoing, all, changes.map((change) => change.path), "Select all changes");
 		all.createSpan({ text: "Select all" });
 
 		const actions = toolbar.createDiv({ cls: "xwiki-changes-actions" });
-		const iconButton = (icon: string, tooltip: string, onClick: () => void, active?: boolean) => {
-			const button = actions.createDiv({ cls: "clickable-icon" });
-			setIcon(button, icon);
-			setTooltip(button, tooltip);
-			button.setAttr("aria-label", tooltip);
-			if (active !== undefined) {
-				button.toggleClass("is-active", active);
-				button.setAttr("aria-pressed", String(active));
-			}
-			button.addEventListener("click", onClick);
-		};
-		iconButton("folder-tree", "Folder view", () => {
+		this.iconButton(actions, "folder-tree", "Folder view", () => {
 			this.folderView = !this.folderView;
 			this.app.workspace.requestSaveLayout();
 			this.render();
 		}, this.folderView);
-		iconButton("refresh-cw", "Refresh", () => void this.scan());
+		this.iconButton(actions, "refresh-cw", "Refresh", () => void this.scan());
 		const publish = actions.createEl("button", { cls: "mod-cta", text: selected.length > 0 ? `Publish (${selected.length})` : "Publish" });
 		publish.disabled = selected.length === 0 || this.plugin.busy !== null;
 		publish.addEventListener("click", () => void this.plugin.publishNotes(selected));
@@ -291,24 +374,71 @@ export class XWikiPanelView extends ItemView {
 			el.createDiv({ cls: "xwiki-panel-hint", text: "Looking for changes…" });
 			return;
 		}
-
 		const tree = el.createDiv({ cls: "xwiki-changes" });
-		const root = this.changeRow(tree, 0, "", "Changes");
-		root.addClass("xwiki-change-root");
-		root.createSpan({ cls: "xwiki-change-count", text: String(changes.length) });
-		if (this.collapsed.has("")) return;
-		if (changes.length === 0) {
-			tree.createDiv({ cls: "xwiki-panel-hint xwiki-changes-empty", text: "No local changes: every note is in sync with XWiki." });
-			return;
-		}
-		if (this.folderView) this.renderFolder(tree, this.folderTree(changes), 1);
-		else for (const change of changes) this.renderChange(tree, change, 1, true);
+		this.renderTree(tree, this.outgoing, "Changes", changes, "No local changes: every note is in sync with XWiki.");
 	}
 
-	/** Groups the changes by vault folder, for the folder view. */
-	private folderTree(changes: NoteChange[]): ChangeFolder {
-		const root: ChangeFolder = { name: "", path: "", folders: new Map(), changes: [] };
-		const folderAt = (path: string): ChangeFolder => {
+	/** The notes to pull: behind their page on XWiki, from the last check. */
+	private renderIncoming(el: HTMLElement): void {
+		const check = this.plugin.incoming;
+		const changes = check?.changes ?? [];
+		const section = this.incomingSection;
+		const pullable = changes.filter((change) => section.selectable(change));
+		const listed = new Set(pullable.map((change) => change.path));
+		for (const path of [...this.selectedIncoming]) if (!listed.has(path)) this.selectedIncoming.delete(path);
+		const selected = pullable.filter((change) => this.selectedIncoming.has(change.path));
+
+		const toolbar = el.createDiv({ cls: "xwiki-changes-toolbar xwiki-incoming-toolbar" });
+		const all = toolbar.createEl("label", { cls: "xwiki-changes-select-all" });
+		this.selectionBox(section, all, pullable.map((change) => change.path), "Select all notes to pull");
+		all.createSpan({ text: "Select all" });
+
+		const actions = toolbar.createDiv({ cls: "xwiki-changes-actions" });
+		const checkButton = actions.createEl("button", { text: "Check XWiki" });
+		setTooltip(checkButton, "Compare every note published or pulled with its page on XWiki");
+		checkButton.disabled = this.plugin.busy !== null;
+		checkButton.addEventListener("click", () => void this.plugin.checkIncoming());
+		const pull = actions.createEl("button", { cls: "mod-cta", text: selected.length > 0 ? `Pull (${selected.length})` : "Pull" });
+		pull.disabled = selected.length === 0 || this.plugin.busy !== null;
+		pull.addEventListener("click", () => void this.plugin.pullIncoming(selected));
+
+		const tree = el.createDiv({ cls: "xwiki-changes" });
+		if (!check) {
+			const root = this.changeRow(tree, 0, section.key, "Incoming from XWiki");
+			root.addClass("xwiki-change-root");
+			if (!this.collapsed.has(section.key)) {
+				tree.createDiv({ cls: "xwiki-panel-hint xwiki-changes-empty", text: "Select Check XWiki to find the notes whose page changed on XWiki." });
+			}
+			return;
+		}
+		const time = new Date(check.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		const notes = [
+			`Checked ${check.checked} of ${check.total} notes at ${time}.`,
+			check.cancelled ? "The check was cancelled." : "",
+			check.failures.length > 0 ? `Not checked: ${check.failures.join("; ")}` : "",
+		].filter(Boolean);
+		this.renderTree(tree, section, "Incoming from XWiki", changes, "Every checked note is up to date with its page.", notes.join(" "));
+	}
+
+	/** A list as a tree below its root row: below the folders of the notes, or flat. */
+	private renderTree<T extends Item>(tree: HTMLElement, section: Section<T>, title: string, items: T[], empty: string, hint?: string): void {
+		const root = this.changeRow(tree, 0, section.key, title);
+		root.addClass("xwiki-change-root");
+		root.createSpan({ cls: "xwiki-change-count", text: String(items.length) });
+		if (this.collapsed.has(section.key)) return;
+		if (hint) tree.createDiv({ cls: "xwiki-panel-hint xwiki-changes-note", text: hint });
+		if (items.length === 0) {
+			tree.createDiv({ cls: "xwiki-panel-hint xwiki-changes-empty", text: empty });
+			return;
+		}
+		if (this.folderView) this.renderFolder(tree, section, this.folderTree(items), 1);
+		else for (const item of items) this.renderItem(tree, section, item, 1, true);
+	}
+
+	/** Groups the notes of a list by vault folder, for the folder view. */
+	private folderTree<T extends Item>(items: T[]): ChangeFolder<T> {
+		const root: ChangeFolder<T> = { name: "", path: "", folders: new Map(), changes: [] };
+		const folderAt = (path: string): ChangeFolder<T> => {
 			let folder = root;
 			const parts = path ? path.split("/") : [];
 			for (const [i, name] of parts.entries()) {
@@ -321,44 +451,49 @@ export class XWikiPanelView extends ItemView {
 			}
 			return folder;
 		};
-		for (const change of changes) {
+		for (const item of items) {
 			// A folder note stands for its folder, as in the file explorer, wherever the layout stores it.
-			const ownFolder = folderForNote(change.path, this.plugin.settings);
-			if (ownFolder !== null && this.app.vault.getFolderByPath(ownFolder)) folderAt(ownFolder).note = change;
-			else folderAt(parentPath(change.path)).changes.push(change);
+			const ownFolder = folderForNote(item.path, this.plugin.settings);
+			if (ownFolder !== null && this.app.vault.getFolderByPath(ownFolder)) folderAt(ownFolder).note = item;
+			else folderAt(parentPath(item.path)).changes.push(item);
 		}
 		return root;
 	}
 
-	private notesIn(folder: ChangeFolder): string[] {
+	/** The notes of a folder and of its subfolders that can be selected. */
+	private notesIn<T extends Item>(section: Section<T>, folder: ChangeFolder<T>): string[] {
 		return [
-			...(folder.note ? [folder.note.path] : []),
-			...[...folder.folders.values()].flatMap((child) => this.notesIn(child)),
-			...folder.changes.map((change) => change.path),
+			...(folder.note && section.selectable(folder.note) ? [folder.note.path] : []),
+			...[...folder.folders.values()].flatMap((child) => this.notesIn(section, child)),
+			...folder.changes.filter((item) => section.selectable(item)).map((item) => item.path),
 		];
 	}
 
 	/** Folders first, then notes, each sorted by name. */
-	private renderFolder(tree: HTMLElement, folder: ChangeFolder, depth: number): void {
+	private renderFolder<T extends Item>(tree: HTMLElement, section: Section<T>, folder: ChangeFolder<T>, depth: number): void {
 		const folders = [...folder.folders.values()].sort((a, b) => a.name.localeCompare(b.name));
 		for (const child of folders) {
-			const row = this.changeRow(tree, depth, child.path, child.name, this.notesIn(child));
-			setTooltip(row, child.note ? changeTooltip(child.note) : child.path);
+			const key = section.key + child.path;
+			const row = this.changeRow(tree, depth, key, child.name, section, this.notesIn(section, child));
+			setTooltip(row, child.note ? section.tooltip(child.note) : child.path);
 			const note = this.plugin.folderNotes.noteOf(child.path);
 			if (note) this.openOnClick(row, note);
-			if (child.note) this.changeMark(row, child.note);
-			if (!this.collapsed.has(child.path)) this.renderFolder(tree, child, depth + 1);
+			if (child.note) {
+				section.mark(row, child.note);
+				this.itemMenu(row, section, child.note);
+			}
+			if (!this.collapsed.has(key)) this.renderFolder(tree, section, child, depth + 1);
 		}
 		const notes = [...folder.changes].sort((a, b) => noteBasename(a.path).localeCompare(noteBasename(b.path)));
-		for (const change of notes) this.renderChange(tree, change, depth, false);
+		for (const item of notes) this.renderItem(tree, section, item, depth, false);
 	}
 
 	/**
-	 * A collapsible row of the tree: the Changes root or a folder; `key` remembers whether it is collapsed.
+	 * A collapsible row of a tree: the root of a list or a folder; `key` remembers whether it is collapsed.
 	 * With `notes`, the row has a selection box for the notes below it. Selecting the row expands or collapses it,
 	 * unless it opens a folder note (`openOnClick`); the arrow always does.
 	 */
-	private changeRow(tree: HTMLElement, depth: number, key: string, name: string, notes?: string[]): HTMLElement {
+	private changeRow<T extends Item>(tree: HTMLElement, depth: number, key: string, name: string, section?: Section<T>, notes?: string[]): HTMLElement {
 		const collapsed = this.collapsed.has(key);
 		const row = tree.createDiv({ cls: "xwiki-change-row xwiki-change-folder" });
 		row.setCssProps({ "--xwiki-depth": String(depth) });
@@ -375,7 +510,7 @@ export class XWikiPanelView extends ItemView {
 			event.stopPropagation();
 			toggle();
 		});
-		if (notes) this.selectionBox(row, notes, `Select the changes in ${key}`);
+		if (section && notes) this.selectionBox(section, row, notes, `Select the notes in ${name}`);
 		row.createSpan({ cls: "xwiki-change-name", text: name });
 		row.addEventListener("click", () => {
 			if (!row.hasClass("xwiki-has-note")) toggle();
@@ -407,19 +542,57 @@ export class XWikiPanelView extends ItemView {
 		setTooltip(badge, STATUS_TOOLTIP[change.status]);
 	}
 
-	/** A changed note: selection box, name, its folder in the flat list, and its status letter. Selecting it opens the note, if it still exists. */
-	private renderChange(tree: HTMLElement, change: NoteChange, depth: number, showFolder: boolean): void {
+	/** A note of a list: selection box, name, its folder in the flat list, and its status letter. Selecting it opens the note, if it still exists. */
+	private renderItem<T extends Item>(tree: HTMLElement, section: Section<T>, item: T, depth: number, showFolder: boolean): void {
 		const row = tree.createDiv({ cls: "xwiki-change-row xwiki-change-note" });
-		row.toggleClass("mod-deleted", change.status === "deleted");
+		row.toggleClass("mod-deleted", section.struck(item));
 		row.setCssProps({ "--xwiki-depth": String(depth) });
 		row.createSpan({ cls: "xwiki-change-chevron" });
-		this.selectionBox(row, [change.path], `Select ${change.path}`);
-		row.createSpan({ cls: "xwiki-change-name", text: noteBasename(change.path) });
-		const folder = parentPath(change.path);
+		const selectable = section.selectable(item);
+		const box = this.selectionBox(section, row, selectable ? [item.path] : [], `Select ${item.path}`);
+		// Keeps the names in line with the other rows.
+		box.toggleClass("is-invisible", !selectable);
+		row.createSpan({ cls: "xwiki-change-name", text: noteBasename(item.path) });
+		const folder = parentPath(item.path);
 		if (showFolder && folder) row.createSpan({ cls: "xwiki-change-folder-path", text: folder });
-		this.changeMark(row, change);
-		setTooltip(row, changeTooltip(change));
-		if (change.file) this.openOnClick(row, change.file);
+		section.mark(row, item);
+		setTooltip(row, section.tooltip(item));
+		if (item.file) this.openOnClick(row, item.file);
+		this.itemMenu(row, section, item);
+	}
+
+	/** The menu of a listed note, on a right click or the context menu key. */
+	private itemMenu<T extends Item>(row: HTMLElement, section: Section<T>, item: T): void {
+		row.addEventListener("contextmenu", (event) => {
+			event.preventDefault();
+			const menu = new Menu();
+			menu.addItem((entry) =>
+				entry
+					.setTitle("Show differences")
+					.setIcon("diff")
+					.onClick(() => section.compare(item)),
+			);
+			const revert = section.revert;
+			if (revert) {
+				menu.addItem((entry) =>
+					entry
+						.setTitle("Revert changes")
+						.setIcon("undo-2")
+						.setWarning(true)
+						.onClick(() => revert(item)),
+				);
+			}
+			const file = item.file;
+			if (file) {
+				menu.addItem((entry) =>
+					entry
+						.setTitle("Open note")
+						.setIcon("file-text")
+						.onClick(() => void this.app.workspace.getLeaf(false).openFile(file)),
+				);
+			}
+			menu.showAtMouseEvent(event);
+		});
 	}
 
 	private button(setting: Setting, label: string, onClick: () => unknown, options: { cta?: boolean; icon?: string } = {}): void {

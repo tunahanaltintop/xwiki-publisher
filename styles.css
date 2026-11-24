@@ -3,6 +3,23 @@
 	min-width: 20em;
 }
 
+.xwiki-publisher-mention-login {
+	color: var(--text-muted);
+}
+
+.xwiki-publisher-comment-input {
+	width: 100%;
+	resize: vertical;
+}
+
+.xwiki-publisher-comment-quote {
+	max-height: 6em;
+	overflow-y: auto;
+	margin: 0 0 var(--size-4-3);
+	color: var(--text-muted);
+	white-space: pre-wrap;
+}
+
 .xwiki-panel .setting-item {
 	padding: var(--size-4-2) 0;
 }
@@ -239,6 +256,32 @@
 	color: var(--color-red);
 }
 
+.xwiki-change-status.mod-incoming-updated {
+	color: var(--color-blue);
+}
+
+.xwiki-change-status.mod-incoming-conflict {
+	color: var(--color-red);
+}
+
+.xwiki-change-status.mod-incoming-missing {
+	color: var(--text-faint);
+}
+
+.xwiki-change-row input.xwiki-change-check.is-invisible {
+	visibility: hidden;
+}
+
+.xwiki-incoming-toolbar {
+	margin-top: var(--size-4-4);
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: var(--size-4-3);
+}
+
+.xwiki-changes-note {
+	padding: 0 var(--size-4-4) var(--size-4-1);
+}
+
 .xwiki-change-note.mod-deleted .xwiki-change-name {
 	color: var(--text-muted);
 }
@@ -265,4 +308,271 @@
 /* Folders with a folder note open it, like in the file explorer; the arrow expands and collapses them. */
 .xwiki-change-folder.xwiki-has-note .xwiki-change-name {
 	border-bottom: 1px dotted var(--text-faint);
+}
+
+/* Side by side comparison of a note and its page */
+
+.modal.xwiki-diff-modal {
+	width: min(96vw, 1400px);
+	max-width: 96vw;
+	height: 85vh;
+}
+
+.xwiki-diff-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
+.xwiki-diff-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding-bottom: var(--size-4-2);
+}
+
+.xwiki-diff-buttons {
+	display: flex;
+	gap: var(--size-4-2);
+}
+
+.xwiki-diff-summary {
+	display: flex;
+	gap: var(--size-4-2);
+	color: var(--text-muted);
+}
+
+.xwiki-diff-count.mod-removed {
+	color: var(--color-red);
+}
+
+.xwiki-diff-count.mod-added {
+	color: var(--color-green);
+}
+
+.xwiki-diff {
+	flex: 1 1 auto;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	font-family: var(--font-monospace);
+	font-size: var(--font-smaller);
+}
+
+.xwiki-diff-row {
+	display: grid;
+	grid-template-columns: 3.5em minmax(0, 1fr) 3.5em minmax(0, 1fr);
+}
+
+.xwiki-diff-head {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	background-color: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	font-family: var(--font-interface);
+	font-weight: var(--font-semibold);
+}
+
+.xwiki-diff-label {
+	display: flex;
+	flex-direction: column;
+	padding: var(--size-4-1) var(--size-4-2);
+	overflow-wrap: anywhere;
+}
+
+.xwiki-diff-label + .xwiki-diff-label {
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.xwiki-diff-missing {
+	color: var(--text-muted);
+	font-weight: var(--font-normal);
+}
+
+.xwiki-diff-number {
+	padding: 0 var(--size-4-1);
+	text-align: right;
+	color: var(--text-faint);
+	user-select: none;
+}
+
+.xwiki-diff-number.mod-right {
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.xwiki-diff-text {
+	padding: 0 var(--size-4-2);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	min-height: 1.5em;
+}
+
+.xwiki-diff-row.mod-delete .mod-left,
+.xwiki-diff-row.mod-change .mod-left {
+	background-color: rgba(var(--color-red-rgb), 0.12);
+}
+
+.xwiki-diff-row.mod-insert .mod-right,
+.xwiki-diff-row.mod-change .mod-right {
+	background-color: rgba(var(--color-green-rgb), 0.12);
+}
+
+.xwiki-diff-text.is-empty {
+	background-color: var(--background-secondary-alt);
+}
+
+.xwiki-diff-row.mod-change .xwiki-diff-text.mod-left .xwiki-diff-word {
+	background-color: rgba(var(--color-red-rgb), 0.35);
+	border-radius: 2px;
+}
+
+.xwiki-diff-row.mod-change .xwiki-diff-text.mod-right .xwiki-diff-word {
+	background-color: rgba(var(--color-green-rgb), 0.35);
+	border-radius: 2px;
+}
+
+.xwiki-diff-fold {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	font-family: var(--font-interface);
+	cursor: pointer;
+}
+
+.xwiki-diff-fold:hover {
+	color: var(--text-normal);
+}
+
+.xwiki-diff-fold-icon {
+	display: flex;
+}
+
+.xwiki-diff-fold-icon svg {
+	width: var(--icon-xs);
+	height: var(--icon-xs);
+}
+
+.xwiki-diff-hunk {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
+	border-top: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	font-family: var(--font-interface);
+	color: var(--text-muted);
+}
+
+.xwiki-diff-hunk-actions {
+	display: flex;
+	gap: var(--size-4-1);
+}
+
+.xwiki-diff-hunk-actions button {
+	padding: 0 var(--size-4-2);
+	height: auto;
+	min-height: 1.8em;
+	font-size: var(--font-smaller);
+}
+
+/* Inline comments shown from their icon */
+
+.xwiki-comment-popover {
+	position: fixed;
+	z-index: var(--layer-popover);
+	max-width: min(420px, calc(100vw - 16px));
+	max-height: 60vh;
+	overflow-y: auto;
+	padding: var(--size-4-2) var(--size-4-3);
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-s);
+	font-size: var(--font-ui-small);
+}
+
+.xwiki-comment-thread + .xwiki-comment-thread {
+	margin-top: var(--size-4-2);
+	padding-top: var(--size-4-2);
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.xwiki-comment-entry p {
+	margin: 0 0 var(--size-4-1);
+}
+
+.xwiki-comment-entry.mod-reply {
+	margin-left: calc(var(--size-4-4) * var(--xwiki-reply-depth, 1));
+	padding-left: var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+}
+
+.xwiki-comment-reply {
+	margin-top: var(--size-4-1);
+	font-size: var(--font-ui-smaller);
+}
+
+.xwiki-comment-ref-hidden {
+	display: none;
+}
+
+.xwiki-comment-actions {
+	display: flex;
+	gap: var(--size-4-1);
+}
+
+.xwiki-mention-list {
+	margin-top: var(--size-4-1);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	max-height: 12em;
+	overflow-y: auto;
+}
+
+.xwiki-mention-item {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-1) var(--size-4-2);
+	cursor: pointer;
+}
+
+.xwiki-mention-item.is-selected,
+.xwiki-mention-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.xwiki-comment-resolved {
+	flex: 1 1 auto;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	align-self: center;
+}
+
+.xwiki-resolved-comments .xwiki-comment-thread {
+	padding: var(--size-4-2) 0;
+}
+
+.xwiki-comment-entry + .xwiki-comment-entry {
+	margin-top: var(--size-4-2);
+}
+
+.xwiki-comment-entry .xwiki-comment-actions button {
+	padding: 0 var(--size-4-2);
+	height: auto;
+	min-height: 1.6em;
+}
+
+/* A resolved comment: its highlight and text faded, as done with. */
+.xwiki-comment-resolved-mark,
+.xwiki-comment-resolved-mark .cm-highlight {
+	opacity: 0.5;
 }

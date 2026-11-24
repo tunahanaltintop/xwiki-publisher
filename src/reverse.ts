@@ -16,6 +16,7 @@ import {
 	unescapeMacros,
 	unescapeMarkdown12,
 } from "./obsidian-syntax.ts";
+import { mentionsToLinks } from "./mentions.ts";
 
 export type ReverseTarget =
 	/** `linktext` points at the downloaded file when known; the attachment name is used otherwise. */
@@ -41,6 +42,11 @@ export interface ReverseOptions {
 	hardLineBreaks?: boolean;
 	/** `{{comment}}` macros come back as `%%comments%%` (when publishing writes comments as macros). */
 	comments?: "remove" | "macro";
+	/**
+	 * Mention macros come back as links to the profiles of the users (see `mentions.ts`): the address of the XWiki,
+	 * and the names of the mentioned users by reference, for the text of the links.
+	 */
+	mentions?: { baseUrl: string; names?: Map<string, string> };
 }
 
 export interface ReverseResult {
@@ -140,6 +146,9 @@ export function convertFromXWiki(markdown: string, resolve: ReverseResolver, opt
 	const converted = transformOutsideCode(withoutBoxes, (text) => {
 		let out = options.hardLineBreaks ? softenLineBreaks(text) : text;
 		out = embeds(out);
+		// Kept aside like embeds: the profile of a user may be a note of the vault, and a mention is not a link to it.
+		const mentions = options.mentions;
+		if (mentions) out = mentionsToLinks(out, mentions.baseUrl, (reference) => mentions.names?.get(reference), keep);
 		out = blockIdsFromMacros(out);
 		out = tasksFromSymbols(out);
 		out = highlightsFromHtml(out);

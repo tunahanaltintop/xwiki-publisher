@@ -44,6 +44,12 @@ export interface XWikiPublisherSettings {
 	preserveMacros: boolean;
 	/** Subfolder next to each pulled note for its attachments; empty to follow Obsidian's attachment setting. */
 	attachmentFolder: string;
+	/** Pulling shows the inline comments of a page in its note; they are never published. */
+	inlineComments: boolean;
+	/** Opening a note that has a page shows the current comments of the page and its mentions as links. */
+	refreshOnOpen: boolean;
+	/** Typing `@` and a name in a note that has a page lists the matching users of the XWiki, to mention one. */
+	mentionSuggest: boolean;
 	/** Folder note layout, matching the Folder notes plugin. */
 	folderNoteLocation: FolderNoteLocation;
 	/** Folder note file name template, as in the Folder notes plugin. */
@@ -78,6 +84,9 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	writeUrlToFrontmatter: true,
 	syncFolder: "",
 	preserveMacros: false,
+	inlineComments: true,
+	mentionSuggest: true,
+	refreshOnOpen: true,
 	attachmentFolder: "assets",
 	folderNoteLocation: "inside",
 	folderNoteName: "{{folder_name}}",
@@ -350,6 +359,17 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 							),
 					},
 					{
+						name: "Suggest users to mention",
+						desc: "When you type @ and the start of a name in a note that has an XWiki page, list the matching XWiki users, as the XWiki editor does. What you type after the @ is sent to XWiki to find them. When off, users are mentioned with the Mention an XWiki user command.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.mentionSuggest).onChange((value) => {
+									settings.mentionSuggest = value;
+									void this.save();
+								}),
+							),
+					},
+					{
 						name: "Upload attachments",
 						desc: "Upload embedded images and linked files as attachments of the page.",
 						build: (setting) =>
@@ -402,6 +422,28 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 										settings.attachmentFolder = value.trim().replace(/[\\/]+/g, "-");
 										void this.save();
 									}),
+							),
+					},
+					{
+						name: "Inline comments",
+						desc: "When pulling, show the inline comments of the XWiki page in the note: the commented text is highlighted and followed by a footnote with the comment and its replies. They stay on XWiki and are left out when the note is published.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.inlineComments).onChange((value) => {
+									settings.inlineComments = value;
+									void this.save();
+								}),
+							),
+					},
+					{
+						name: "Update comments and mentions when a note is opened",
+						desc: "When you open a note that has an XWiki page, read the page in the background and show its current inline comments and its mentions as links, at most every two minutes per note. The text of the note is never changed: when the page text changed on XWiki, you are told to pull it.",
+						build: (setting) =>
+							setting.addToggle((toggle) =>
+								toggle.setValue(settings.refreshOnOpen).onChange((value) => {
+									settings.refreshOnOpen = value;
+									void this.save();
+								}),
 							),
 					},
 					{

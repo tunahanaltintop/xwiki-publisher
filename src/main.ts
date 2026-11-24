@@ -1,5 +1,5 @@
-import { Menu, normalizePath, Notice, Plugin, TAbstractFile, TFile, TFolder, WorkspaceLeaf } from "obsidian";
-import { convertNote, ResolvedLink } from "./converter";
+import { Editor, MarkdownView, Menu, normalizePath, Notice, Plugin, TAbstractFile, TFile, TFolder, WorkspaceLeaf } from "obsidian";
+import { convertNote, ResolvedLink, stripFrontmatter } from "./converter";
 import {
 	contentReference,
 	folderPages,
@@ -13,13 +13,21 @@ import {
 	parseSpaceInput,
 	serializeReference,
 } from "./location";
-import { choose, chooseFolder, prompt } from "./modals";
+import { choose, chooseFolder, prompt, promptText } from "./modals";
 import { DeletedNote, deletionBlocker, deletionOrder, noteBasename } from "./deletions";
 import { FolderNotes } from "./folder-notes";
+import { commentReferences, tidyCommentReferences } from "./comment-display";
+import { CommentPopover, CommentPopoverHost, ResolvedCommentsModal } from "./comment-popover";
+import { DiffHunk, lines, replaceLines, sameText } from "./diff";
+import { DiffBlockAction, DiffModal, DiffSide } from "./diff-modal";
+import { htmlToText } from "./html";
+import { commentAt, commentsBelow, CommentThread, selectionOnPage } from "./inline-comments";
+import { MentionHost, MentionModal, MentionSuggest } from "./mention-suggest";
+import { anchorMentionLinks, mentionLink, MentionUser, newMentionMacro } from "./mentions";
 import { describeLinks, failedReport, LinkReport, syncPageLinks, workPackagesIn } from "./openproject";
 import { OpenProjectClient } from "./openproject-client";
 import { DEFAULT_SETTINGS, hardLineBreaks, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
-import { AttachmentPaths, AttachmentVersions, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
+import { AttachmentPaths, AttachmentVersions, IncomingState, PullOutcome, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
 import { RemotePage, XWikiClient } from "./xwiki-client";
 
@@ -48,6 +56,51 @@ interface NotePublishResult {
 /** A note with local changes to publish: never synced with XWiki (`added`), edited since its last sync (`modified`), or removed from the vault (`deleted`). */
 export type NoteChange = { path: string; status: "added" | "modified"; file: TFile } | { path: string; status: "deleted"; file: null; note: DeletedNote };
 
+/** A note that pulling would change: its page on XWiki is newer than the note, or gone. */
+export interface IncomingChange {
+	path: string;
+	file: TFile;
+	state: IncomingState;
+	/** Version of the page at the last sync of the note. */
+	version: string;
+	/** Version of the page on XWiki now; missing when the page is gone. */
+	remoteVersion?: string;
+}
+
+/** Result of the last check of the notes of the vault against their pages. */
+export interface IncomingCheck {
+	time: number;
+	/** Notes compared with their page. */
+	checked: number;
+	/** Notes with a sync record, which a check compares. */
+	total: number;
+	changes: IncomingChange[];
+	/** Notes that could not be compared, with the reason. */
+	failures: string[];
+	cancelled: boolean;
+}
+
+/** A note opened again within this time is not compared with its page again. */
+const REFRESH_INTERVAL_MS = 2 * 60_000;
+
+/** A note and its page, as compared: the page as a pull would write it into the note. `null` for a side that is missing. */
+interface Comparison {
+	remote: RemotePage | null;
+	page: string | null;
+	/** Attachments the page links to. */
+	attachments: Set<string>;
+	note: string | null;
+}
+
+/** The lines of the note and of the page that a block of a comparison covers. */
+interface BlockRanges {
+	note: [number, number];
+	page: [number, number];
+}
+
+/** Pages read at the same time by a check: fast enough for large vaults, gentle enough for the server. */
+const CHECK_CONCURRENCY = 4;
+
 /** What deleting the page of a deleted note did. */
 interface PageDeletionResult {
 	outcome: "deleted" | "gone" | "skipped";
@@ -62,6 +115,11 @@ export interface ActivityEntry {
 	error: boolean;
 }
 
+/** A pull after which the note is what its page is: nothing left to pull for it. */
+function isSettled(outcome: PullOutcome): boolean {
+	return outcome === "created" || outcome === "updated" || outcome === "unchanged";
+}
+
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -71,7 +129,7 @@ function isConflictCopy(file: TFile): boolean {
 	return file.basename.endsWith(" (XWiki conflict)");
 }
 
-export default class XWikiPublisherPlugin extends Plugin {
+export default class XWikiPublisherPlugin extends Plugin implements MentionHost, CommentPopoverHost {
 	settings: XWikiPublisherSettings = { ...DEFAULT_SETTINGS };
 	syncState: SyncState = {};
 	deletedNotes: SyncState = {};
@@ -87,6 +145,12 @@ export default class XWikiPublisherPlugin extends Plugin {
 	/** Whether the running operation can be stopped from the panel (space sync, folder publish). */
 	cancellable = false;
 	private cancelRequested = false;
+	/** Notes behind their pages, from the last check against XWiki; `null` until the first check. */
+	incoming: IncomingCheck | null = null;
+	/** When each note was last compared with its page on opening, by path. */
+	private readonly refreshedAt = new Map<string, number>();
+	/** Page version the user was last told to pull, by note path: told once per version. */
+	private readonly announced = new Map<string, string>();
 	private listeners = new Set<() => void>();
 	/** XWiki URL whose server was seen to support the configured Markdown syntax, so publishing need not ask again. */
 	private syntaxCheckedFor: string | null = null;
@@ -156,6 +220,124 @@ export default class XWikiPublisherPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "comment-selection",
+			name: "Comment on the selected text on XWiki",
+			editorCheckCallback: (checking, editor, ctx) => {
+				const file = ctx.file;
+				if (!file || !this.syncState[file.path] || !editor.somethingSelected()) return false;
+				if (!checking) void this.commentOnSelection(editor, file);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "reply-to-comment",
+			name: "Reply to the XWiki comment at the cursor",
+			editorCheckCallback: (checking, editor, ctx) => {
+				const file = ctx.file;
+				const comment = file && this.syncState[file.path] ? this.commentAtCursor(editor) : null;
+				if (!file || comment === null) return false;
+				if (!checking) void this.replyToComment(editor, file, comment);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "resolved-comments",
+			name: "Show resolved XWiki comments of the note",
+			checkCallback: (checking) => {
+				const file = this.app.workspace.getActiveFile();
+				if (!file || file.extension !== "md" || !this.syncState[file.path]) return false;
+				if (!checking) void this.showResolvedComments(file);
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "mention-user",
+			name: "Mention an XWiki user",
+			editorCheckCallback: (checking, editor, ctx) => {
+				const file = ctx.file;
+				if (!file || !this.hasPage(file)) return false;
+				if (!checking) this.mentionUser(editor, file);
+				return true;
+			},
+		});
+		this.registerEditorSuggest(new MentionSuggest(this));
+
+		// The references of inline comments are hidden where notes are shown; the 💬 icon stands for them.
+		this.registerEditorExtension(commentReferences);
+		this.registerMarkdownPostProcessor((el) => tidyCommentReferences(el));
+		// Tables in Live Preview are rendered outside the editor's text, and not always through post processors.
+		const pending = new Set<HTMLElement>();
+		const observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				for (const node of Array.from(mutation.addedNodes)) {
+					const text = node.textContent ?? "";
+					if (!text.includes("💬") && !text.includes("✅")) continue;
+					if (node.instanceOf(HTMLElement)) pending.add(node);
+					else if (node.instanceOf(Text) && node.parentElement) pending.add(node.parentElement);
+				}
+			}
+			if (pending.size === 0) return;
+			window.requestAnimationFrame(() => {
+				for (const el of pending) if (el.isConnected) tidyCommentReferences(el.closest(".cm-table-widget, .cm-embed-block, td, th") ?? el);
+				pending.clear();
+			});
+		});
+		this.app.workspace.onLayoutReady(() => observer.observe(this.app.workspace.containerEl, { childList: true, subtree: true }));
+		this.register(() => observer.disconnect());
+
+		// Selecting the icon of an inline comment shows the comment, wherever the note is shown.
+		const popover = new CommentPopover(this);
+		this.register(() => popover.close());
+		// On the window and while capturing, so that the editor never sees a press on the icon.
+		for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "dblclick"] as const) {
+			this.registerDomEvent(window, type, (event) => popover.handle(event), { capture: true });
+		}
+		this.registerDomEvent(document, "keydown", (event) => {
+			if (event.key === "Escape") popover.close();
+		});
+		this.registerDomEvent(window, "resize", () => popover.close());
+
+		// Comments and mentions are written on notes that have a page: the ones published or pulled.
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor, info) => {
+				const file = info.file;
+				if (!file || !this.syncState[file.path]) return;
+				menu.addItem((item) =>
+					item
+						.setTitle("Mention XWiki user")
+						.setIcon("at-sign")
+						.onClick(() => this.mentionUser(editor, file)),
+				);
+				menu.addItem((item) =>
+					item
+						.setTitle("Resolved XWiki comments")
+						.setIcon("check-check")
+						.onClick(() => void this.showResolvedComments(file)),
+				);
+				if (editor.somethingSelected()) {
+					menu.addItem((item) =>
+						item
+							.setTitle("Comment on XWiki")
+							.setIcon("message-square-plus")
+							.onClick(() => void this.commentOnSelection(editor, file)),
+					);
+				}
+				const comment = this.commentAtCursor(editor);
+				if (comment !== null) {
+					menu.addItem((item) =>
+						item
+							.setTitle("Reply to XWiki comment")
+							.setIcon("reply")
+							.onClick(() => void this.replyToComment(editor, file, comment)),
+					);
+				}
+			}),
+		);
+
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu: Menu, file: TAbstractFile) => {
 				if (file instanceof TFolder) {
@@ -183,10 +365,30 @@ export default class XWikiPublisherPlugin extends Plugin {
 			}),
 		);
 
-		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.sync.onRename(file, oldPath)));
-		this.registerEvent(this.app.vault.on("delete", (file) => this.sync.onDelete(file)));
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.sync.onRename(file, oldPath);
+				// The incoming notes follow their files; a moved folder moves the notes in it.
+				for (const change of this.incoming?.changes ?? []) change.path = change.file.path;
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				this.sync.onDelete(file);
+				if (this.incoming) this.incoming.changes = this.incoming.changes.filter((change) => this.app.vault.getFileByPath(change.file.path) === change.file);
+			}),
+		);
 		this.registerEvent(this.app.vault.on("create", (file) => this.sync.onCreate(file)));
-		this.app.workspace.onLayoutReady(() => this.sync.reconcileRecords());
+		this.app.workspace.onLayoutReady(() => {
+			this.sync.reconcileRecords();
+			const active = this.app.workspace.getActiveFile();
+			if (active) void this.refreshOpened(active);
+		});
+		this.registerEvent(
+			this.app.workspace.on("file-open", (file) => {
+				if (file && this.app.workspace.layoutReady) void this.refreshOpened(file);
+			}),
+		);
 	}
 
 	/** Opens the side panel in the right sidebar, or reveals it when already open. */
@@ -587,11 +789,22 @@ export default class XWikiPublisherPlugin extends Plugin {
 	private async publishNote(
 		client: XWikiClient,
 		file: TFile,
-		options: { mode: OverwriteMode; status: (message: string) => void; skipUnchanged?: boolean; knownPages?: Set<string> },
+		options: {
+			mode: OverwriteMode;
+			status: (message: string) => void;
+			skipUnchanged?: boolean;
+			knownPages?: Set<string>;
+			/** Text to publish instead of the note: the page with one block of the note's changes. */
+			body?: string;
+			/** The page must be at this version, the one `body` was made from; a newer one is not overwritten. */
+			expectedVersion?: string;
+			/** Record the note as in sync with the page (the default); not when the note and the page still differ in ways the record cannot tell. */
+			record?: boolean;
+		},
 	): Promise<NotePublishResult> {
 		const location = this.sync.locate(file);
 		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		const content = await this.app.vault.cachedRead(file);
+		const content = options.body ?? (await this.app.vault.cachedRead(file));
 
 		const resolve = (linkpath: string): ResolvedLink | null => {
 			const target = this.app.metadataCache.getFirstLinkpathDest(linkpath, file.path);
@@ -610,15 +823,21 @@ export default class XWikiPublisherPlugin extends Plugin {
 			hardLineBreaks: hardLineBreaks(this.settings, this.app),
 			comments: this.settings.obsidianComments,
 			xwikiReferences: true,
+			mentions: { baseUrl: this.settings.baseUrl },
 		});
 
 		const remote = await client.getPage(location);
+		if (options.expectedVersion !== undefined) {
+			if (!remote || remote.version !== options.expectedVersion) throw new Error("The page changed on XWiki since the comparison was opened. It was compared again: check the change and try once more.");
+			if (!/^markdown\//i.test(remote.syntax)) throw new Error(`The page is written in ${remote.syntax}. Publish the whole note to turn it into Markdown first.`);
+		}
 		if (options.skipUnchanged && remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content)) {
 			options.knownPages?.add(serializeReference(location));
 			// The page stays as it is, but its work packages may not be linked yet: OpenProject may have been set up since.
 			return { outcome: "unchanged", uploaded: 0, failed: [], links: await this.syncWorkPackageLinks(client, location, remote.content, markdown, options.status) };
 		}
-		const blocker = await this.overwriteBlocker(file, location, remote, options.mode);
+		// A block is published over the version it was compared with, which is checked above.
+		const blocker = options.expectedVersion !== undefined ? null : await this.overwriteBlocker(file, location, remote, options.mode);
 		if (blocker) return { outcome: "skipped", reason: blocker, uploaded: 0, failed: [], links: null };
 
 		await this.ensureFolderPages(client, file, options.knownPages);
@@ -653,9 +872,26 @@ export default class XWikiPublisherPlugin extends Plugin {
 				frontmatter[FM_URL] = url;
 			});
 		}
+		// Mentions written in the note keep the anchors this publish gave them: published again, they are the same.
+		let published = options.body;
+		if (published === undefined) {
+			const sent = anchorMentionLinks(stripFrontmatter(content), this.settings.baseUrl, markdown);
+			if (sent !== stripFrontmatter(content)) {
+				published = sent;
+				await this.changeNote(file, (whole) => {
+					const body = stripFrontmatter(whole);
+					const next = anchorMentionLinks(body, this.settings.baseUrl, markdown);
+					return next === body ? whole : whole.slice(0, whole.length - body.length) + next;
+				});
+			}
+		}
 		// Attachment uploads create page versions too, so read the version once everything is saved.
 		const saved = await client.getPage(location);
-		if (saved) await this.sync.recordSync(file, saved.version, location);
+		if (options.record !== false) {
+			if (saved) await this.sync.recordSync(file, saved.version, location, { content: saved.content, body: published });
+			// The page is now what the note is: nothing to pull for it anymore.
+			this.settleIncoming(file);
+		}
 		const links = await this.syncWorkPackageLinks(client, location, remote?.content ?? "", markdown, options.status);
 		return { outcome: created ? "created" : "updated", uploaded, failed, links };
 	}
@@ -888,6 +1124,274 @@ export default class XWikiPublisherPlugin extends Plugin {
 		}
 	}
 
+	/** The note shown where `target` is, with its text, when it may have inline comments. */
+	async noteAt(target: Node): Promise<{ path: string; text: string } | null> {
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			const view = leaf.view;
+			if (!(view instanceof MarkdownView) || !view.file || !view.containerEl.contains(target)) continue;
+			const text = view.getMode() === "source" ? view.editor.getValue() : await this.app.vault.cachedRead(view.file);
+			return text.includes("[^xwiki-") ? { path: view.file.path, text } : null;
+		}
+		return null;
+	}
+
+	/** Resolves an inline comment of a note, on wikis with comment resolution. */
+	resolve(path: string, comment: number, resolved = true): (() => void) | null {
+		const file = this.app.vault.getFileByPath(path);
+		return file && this.syncState[path] ? () => void this.setResolved(file, comment, resolved) : null;
+	}
+
+	/**
+	 * Resolves or reopens an inline comment through the wiki's comment resolution service, then shows the comments of
+	 * the page in the note again: a resolved comment leaves the note, a reopened one comes back. Returns whether it did.
+	 */
+	async setResolved(file: TFile, comment: number, resolved: boolean): Promise<boolean> {
+		let done = false;
+		await this.exclusive(`${resolved ? "resolving" : "reopening"} a comment of "${file.basename}"`, async () => {
+			const client = this.clientOrNotice();
+			if (!client) return;
+			try {
+				const location = this.sync.locate(file);
+				const page = await client.getPage(location);
+				const state = page ? await client.getCommentResolutions(location) : null;
+				if (!page) {
+					this.report(`"${file.basename}" has no page on XWiki.`, true);
+					return;
+				}
+				if (!state) {
+					this.report("This XWiki cannot resolve comments: it has no comment resolution service (Tools.CommentResolve).", true);
+					return;
+				}
+				if (!state.canResolve) {
+					this.report(`You cannot ${resolved ? "resolve" : "reopen"} comments of this page on XWiki.`, true);
+					return;
+				}
+				// Whether resolving saves the page or not, the note is only moved to the new version when nothing else changed it.
+				await this.sync.postComment(client, file, location, page, async () => {
+					await client.setCommentResolved(location, comment, resolved);
+				});
+				done = true;
+				this.report(`${resolved ? "Resolved" : "Reopened"} a comment of "${file.basename}" on XWiki.`);
+			} catch (error) {
+				console.error("XWiki Publisher: resolving a comment failed", error);
+				this.report(`${resolved ? "Resolving" : "Reopening"} the comment failed: ${errorMessage(error)}`, true);
+			}
+		});
+		return done;
+	}
+
+	/** Lists the resolved inline comments of a note, which it does not show, to read or reopen them. */
+	async showResolvedComments(file: TFile): Promise<void> {
+		const client = this.clientOrNotice();
+		if (!client) return;
+		const notice = new Notice(`Reading the resolved comments of "${file.basename}"…`, 0);
+		try {
+			const location = this.sync.locate(file);
+			const page = await client.getPage(location);
+			if (!page) throw new Error("the note has no page on XWiki");
+			if (!(await client.getCommentResolutions(location))) throw new Error("this XWiki has no comment resolution service (Tools.CommentResolve)");
+			const resolved = (await this.sync.commentThreadsOf(client, location, page)).filter((thread) => thread.resolved);
+			notice.hide();
+			new ResolvedCommentsModal(this.app, file.basename, file.path, resolved, (thread) => this.setResolved(file, thread.id, false)).open();
+		} catch (error) {
+			notice.hide();
+			console.error("XWiki Publisher: reading resolved comments failed", error);
+			this.report(`Could not read the resolved comments: ${errorMessage(error)}`, true);
+		}
+	}
+
+	/** Deletes an inline comment of a note with its replies, on XWiki, after asking. */
+	remove(path: string, comment: number): (() => void) | null {
+		const file = this.app.vault.getFileByPath(path);
+		return file && this.syncState[path] ? () => void this.deleteComment(file, comment) : null;
+	}
+
+	/**
+	 * Deletes an inline comment and its replies on XWiki, after a confirmation that says how many replies go with it,
+	 * then shows the comments of the page in the note again.
+	 */
+	async deleteComment(file: TFile, comment: number): Promise<void> {
+		await this.exclusive(`deleting a comment of "${file.basename}"`, async () => {
+			const client = this.clientOrNotice();
+			if (!client) return;
+			try {
+				const location = this.sync.locate(file);
+				const page = await client.getPage(location);
+				// The comment may be a reply: the thread it is in tells which replies are below it.
+				const threads = page ? await this.sync.commentThreadsOf(client, location, page) : [];
+				const thread = threads.find((candidate) => candidate.entries.some((entry) => entry.id === comment));
+				if (!page || !thread) {
+					this.report("That comment is no longer on XWiki. Pull the note to update its comments.", true);
+					return;
+				}
+				// Replies below it first, newest first: a comment is never left with replies to nothing.
+				const ids = commentsBelow(thread, comment);
+				const replies = ids.length - 1;
+				const what = comment === thread.id ? "comment" : "reply";
+				const confirmed = await choose(
+					this.app,
+					`Delete ${what}`,
+					`Delete this ${what}${replies > 0 ? ` and the ${replies} ${replies === 1 ? "reply" : "replies"} below it` : ""} on XWiki, for everyone? This cannot be undone from Obsidian.`,
+					[
+						{ label: "Delete", value: true, warning: true },
+						{ label: "Cancel", value: false },
+					],
+				);
+				if (!confirmed) return;
+				await this.sync.postComment(
+					client,
+					file,
+					location,
+					page,
+					async () => {
+						for (const id of ids) await client.deleteComment(location, id);
+					},
+					ids.length,
+				);
+				this.report(`Deleted a ${what} of "${file.basename}" on XWiki.`);
+			} catch (error) {
+				console.error("XWiki Publisher: deleting a comment failed", error);
+				this.report(`Deleting the comment failed: ${errorMessage(error)}`, true);
+			}
+		});
+	}
+
+	/** Mentioning users in a comment written for the page of `file`. */
+	private mentionInput(file: TFile) {
+		return { search: (input: string) => this.searchUsers(file, input), macro: (user: MentionUser) => newMentionMacro(user.reference) };
+	}
+
+	/** Starts a reply to an inline comment of a note, from the editor it is open in. */
+	reply(path: string, comment: number, quote?: string): (() => void) | null {
+		const file = this.app.vault.getFileByPath(path);
+		if (!file || !this.syncState[path]) return null;
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.file === file) return () => void this.replyToComment(view.editor, file, comment, quote);
+		}
+		return null;
+	}
+
+	/** An inline comment of a note with its replies, as XWiki has them now; `null` when it cannot be read. */
+	async thread(path: string, comment: number): Promise<CommentThread | null> {
+		const file = this.app.vault.getFileByPath(path);
+		if (!file || !this.syncState[path]) return null;
+		try {
+			const client = this.createClient();
+			const location = this.sync.locate(file);
+			const page = await client.getPage(location);
+			return page ? await this.sync.commentThread(client, location, page, comment) : null;
+		} catch (error) {
+			console.debug("XWiki Publisher: could not read the comment", error);
+			return null;
+		}
+	}
+
+	suggestsMentions(): boolean {
+		return this.settings.mentionSuggest;
+	}
+
+	hasPage(file: TFile): boolean {
+		return this.syncState[file.path] !== undefined;
+	}
+
+	/** Users of the XWiki whose name or login contains `input`, asked through the page of `file`. */
+	searchUsers(file: TFile, input: string): Promise<MentionUser[]> {
+		return this.createClient().searchUsers(this.locate(file), input);
+	}
+
+	/** A mention written in Obsidian: the link to the profile of the user. Publishing gives it its anchor. */
+	mentionText(user: MentionUser): string | null {
+		return mentionLink(this.settings.baseUrl, { reference: user.reference, style: "FULL_NAME" }, user.name);
+	}
+
+	/** Asks for a user of the XWiki and mentions that user at the cursor. */
+	mentionUser(editor: Editor, file: TFile): void {
+		new MentionModal(
+			this.app,
+			(input) => this.searchUsers(file, input),
+			(user) => {
+				const link = this.mentionText(user);
+				if (link) editor.replaceSelection(`${link} `);
+			},
+		).open();
+	}
+
+	/** Inline comment of the page shown where the cursor is, if any. */
+	private commentAtCursor(editor: Editor): number | null {
+		const cursor = editor.getCursor();
+		return commentAt(editor.getLine(cursor.line), cursor.ch);
+	}
+
+	/**
+	 * Adds an inline comment on the text selected in a note, on its XWiki page. The comment is sent right away, like
+	 * a comment made on XWiki, and then shown in the note with the other comments of the page.
+	 */
+	async commentOnSelection(editor: Editor, file: TFile): Promise<void> {
+		const note = editor.getValue();
+		const from = editor.posToOffset(editor.getCursor("from"));
+		const to = editor.posToOffset(editor.getCursor("to"));
+		await this.exclusive(`commenting on "${file.basename}"`, async () => {
+			const client = this.clientOrNotice();
+			if (!client) return;
+			let notice = new Notice("Looking up the selected text on XWiki…", 0);
+			try {
+				const location = this.sync.locate(file);
+				const page = await client.getPage(location);
+				if (!page) {
+					this.report(`"${file.basename}" has no page on XWiki. Publish it first.`, true);
+					return;
+				}
+				// XWiki attaches a comment to the text of the page as it shows it, so that is where the selection is looked up.
+				const target = selectionOnPage(note, from, to, htmlToText(await client.getAnnotatedHtml(location)));
+				notice.hide();
+				if (!target) {
+					this.report("The selected text is not on the XWiki page, or is there more than once with the same text around it. Publish the note if the text is new, or select more of it.", true, 10000);
+					return;
+				}
+				const text = await promptText(this.app, "Comment on XWiki", "Your comment", "Add comment", target.selection, this.mentionInput(file));
+				if (!text) return;
+				notice = new Notice("Sending the comment to XWiki…", 0);
+				await this.sync.postComment(client, file, location, page, () => client.addAnnotation(location, target, text));
+				this.report(`Comment added to "${file.basename}" on XWiki.`);
+			} catch (error) {
+				console.error("XWiki Publisher: comment failed", error);
+				this.report(`Commenting on XWiki failed: ${errorMessage(error)}`, true);
+			} finally {
+				notice.hide();
+			}
+		});
+	}
+
+	/** Replies to the inline comment `comment` of the page of a note; the reply is sent right away. */
+	async replyToComment(editor: Editor, file: TFile, comment: number, quote?: string): Promise<void> {
+		// The comment answered above the input: the one given, or the thread as the note shows it.
+		const shown = quote ?? new RegExp(`^\\[\\^xwiki-${comment}\\]: (.*)$`, "m").exec(editor.getValue())?.[1].replace(/<br>/g, "\n");
+		const text = await promptText(this.app, "Reply to XWiki comment", "Your reply", "Reply", shown, this.mentionInput(file));
+		if (!text) return;
+		await this.exclusive(`replying on "${file.basename}"`, async () => {
+			const client = this.clientOrNotice();
+			if (!client) return;
+			const notice = new Notice("Sending the reply to XWiki…", 0);
+			try {
+				const location = this.sync.locate(file);
+				const page = await client.getPage(location);
+				// The note may show a comment that was deleted since: a reply to it would be left on its own.
+				if (!page || !(await client.listComments(location)).some((existing) => existing.id === comment)) {
+					this.report("That comment is no longer on XWiki. Pull the note to update its comments.", true);
+					return;
+				}
+				await this.sync.postComment(client, file, location, page, () => client.addComment(location, text, comment));
+				this.report(`Reply added to "${file.basename}" on XWiki.`);
+			} catch (error) {
+				console.error("XWiki Publisher: reply failed", error);
+				this.report(`Replying on XWiki failed: ${errorMessage(error)}`, true);
+			} finally {
+				notice.hide();
+			}
+		});
+	}
+
 	pullNote(file: TFile): Promise<void> {
 		return this.exclusive(`pulling "${file.basename}"`, () => this.doPullNote(file));
 	}
@@ -904,11 +1408,457 @@ export default class XWikiPublisherPlugin extends Plugin {
 				index: this.sync.buildIndex(),
 			});
 			notice.hide();
+			if (isSettled(result.outcome)) this.settleIncoming(file);
 			this.report(this.describeOutcome(result, file.basename), result.outcome === "conflict");
 		} catch (error) {
 			notice.hide();
 			console.error("XWiki Publisher: pull failed", error);
 			this.report(`Pulling from XWiki failed: ${errorMessage(error)}`, true);
+		}
+	}
+
+	/**
+	 * Shows the current comments and mentions of the page of a note that was opened, in the background. Skipped while
+	 * another operation runs, and for a note compared with its page a short while ago. Failures are only logged:
+	 * opening a note must work without XWiki.
+	 */
+	private async refreshOpened(file: TFile): Promise<void> {
+		if (!this.settings.refreshOnOpen || file.extension !== "md" || this.busy || !this.syncState[file.path]) return;
+		if (Date.now() - (this.refreshedAt.get(file.path) ?? 0) < REFRESH_INTERVAL_MS) return;
+		this.refreshedAt.set(file.path, Date.now());
+		let client: XWikiClient;
+		try {
+			client = this.createClient();
+		} catch {
+			return;
+		}
+		try {
+			const result = await this.sync.refreshShown(
+				client,
+				file,
+				async () => this.openEditor(file)?.getValue() ?? (await this.app.vault.read(file)),
+				(transform) => this.changeNote(file, transform),
+			);
+			if (!result) return;
+			// A note an earlier version counted as edited for its spacing only: it is in sync if it shows its page.
+			if (this.sync.hasOldFingerprint(file) && this.sync.isLocallyChanged(file, await this.readNote(file))) {
+				await this.settleIfSame(file, this.locate(file), await this.loadComparison(client, file, this.locate(file)));
+			}
+			// At the version of the page, with all its attachments, a pull would not change the note anymore.
+			const record = this.syncState[file.path];
+			if (record?.version === result.version && !record.missingAttachments?.length) this.settleIncoming(file);
+			if (result.pageChanged && this.announced.get(file.path) !== result.version) {
+				this.announced.set(file.path, result.version);
+				new Notice(`"${file.basename}" changed on XWiki (version ${result.version}). Pull it to get the new text.`, 8000);
+			}
+		} catch (error) {
+			console.debug(`XWiki Publisher: could not update the comments and mentions of ${file.path}`, error);
+		}
+	}
+
+	/** The editor a note is open in for editing, if any. */
+	private openEditor(file: TFile): Editor | null {
+		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+			const view = leaf.view;
+			if (view instanceof MarkdownView && view.file === file && view.getMode() === "source") return view.editor;
+		}
+		return null;
+	}
+
+	/**
+	 * Changes a note with a function of its whole text, and returns the new text, or `null` when nothing changed.
+	 * A note open for editing is changed in its editor, from what is typed there, so nothing typed is lost: only the
+	 * changed part is replaced, which keeps the cursor and the undo history. Obsidian then saves it.
+	 */
+	private async changeNote(file: TFile, transform: (text: string) => string): Promise<string | null> {
+		const editor = this.openEditor(file);
+		if (!editor) {
+			let changed: string | null = null;
+			await this.app.vault.process(file, (data) => {
+				const next = transform(data);
+				if (next !== data) changed = next;
+				return next;
+			});
+			return changed;
+		}
+		const before = editor.getValue();
+		const after = transform(before);
+		if (after === before) return null;
+		let start = 0;
+		while (start < before.length && start < after.length && before[start] === after[start]) start++;
+		let end = 0;
+		while (end < before.length - start && end < after.length - start && before[before.length - 1 - end] === after[after.length - 1 - end]) end++;
+		editor.replaceRange(after.slice(start, after.length - end), editor.offsetToPos(start), editor.offsetToPos(before.length - end));
+		return after;
+	}
+
+	/**
+	 * Compares a listed note with its page, side by side: the old version on the left, the new one on the right. For a
+	 * change to publish, the old version is the page on XWiki and the new one the note; for a note to pull, the other
+	 * way round. The page is shown as pulling would write it into the note, so only real differences are marked.
+	 */
+	async showDifferences(direction: "outgoing" | "incoming", file: TFile | null, location: PageLocation, name: string, revert?: () => Promise<boolean>): Promise<void> {
+		const client = this.clientOrNotice();
+		if (!client) return;
+		const notice = new Notice(`Comparing "${name}" with XWiki…`, 0);
+		let state: Comparison;
+		try {
+			state = await this.loadComparison(client, file, location);
+		} catch (error) {
+			notice.hide();
+			console.error("XWiki Publisher: comparison failed", error);
+			this.report(`Comparing with XWiki failed: ${errorMessage(error)}`, true);
+			return;
+		}
+		notice.hide();
+		if (file) await this.settleIfSame(file, location, state);
+		const outgoing = direction === "outgoing";
+		const sides = (): [DiffSide, DiffSide] => {
+			const page: DiffSide = state.remote
+				? { label: `XWiki · version ${state.remote.version}`, text: state.page }
+				: { label: "XWiki", text: null, missing: "the page is not on XWiki" };
+			const note: DiffSide = file ? { label: `Vault · ${file.path}`, text: state.note } : { label: "Vault", text: null, missing: "the note was deleted from the vault" };
+			return outgoing ? [page, note] : [note, page];
+		};
+		// Which lines of the note and of the page a block covers.
+		const ranges = (hunk: DiffHunk): BlockRanges => (outgoing ? { page: hunk.left, note: hunk.right } : { page: hunk.right, note: hunk.left });
+		const reload = async (): Promise<[DiffSide, DiffSide]> => {
+			state = await this.loadComparison(client, file, location);
+			return sides();
+		};
+		const blocks: DiffBlockAction[] = [];
+		if (file) {
+			const toNote: DiffBlockAction = {
+				label: outgoing ? "Revert" : "Pull",
+				tooltip: outgoing ? "Undo this change in the note: it gets the lines of the XWiki page back" : "Take this change into the note",
+				warning: outgoing,
+				run: async (hunk) => {
+					if (outgoing && !(await this.confirmBlock("Revert this change?", "The note gets the lines of the XWiki page back, and the lines shown on the right are lost."))) return null;
+					await this.pullBlock(client, file, location, state, ranges(hunk));
+					return reload();
+				},
+			};
+			const toPage: DiffBlockAction = {
+				label: outgoing ? "Publish" : "Revert",
+				tooltip: outgoing ? "Publish only this change to XWiki" : "Undo this change on XWiki: the page gets the lines of the note back",
+				warning: !outgoing,
+				run: async (hunk) => {
+					if (!outgoing && !(await this.confirmBlock("Undo this change on XWiki?", "The page gets the lines of the note back, published under your XWiki account. The change shown on the right is removed from the page."))) {
+						return null;
+					}
+					await this.publishBlock(client, file, location, state, ranges(hunk));
+					return reload();
+				},
+			};
+			blocks.push(...(outgoing ? [toPage, toNote] : [toNote, toPage]));
+		}
+		const [left, right] = sides();
+		new DiffModal(this.app, name, left, right, { revert, blocks, available: () => state.remote !== null && state.note !== null }).open();
+	}
+
+	/**
+	 * Records a note as in sync when it shows its page as a pull would write it, spacing aside, whatever its record
+	 * says: an earlier version of the plugin counted spacing as an edit, and the page may have had a version since
+	 * without a new text, such as a comment. Returns whether it did.
+	 */
+	private async settleIfSame(file: TFile, location: PageLocation, state: Comparison): Promise<boolean> {
+		if (!state.remote || state.note === null || state.page === null || !sameText(state.note, state.page)) return false;
+		const behind = this.syncState[file.path]?.version !== state.remote.version;
+		if (!behind && !this.sync.isLocallyChanged(file, await this.app.vault.read(file))) return false;
+		await this.sync.recordSync(file, state.remote.version, location, { content: state.remote.content, body: state.note, comments: true, pulled: true });
+		this.settleIncoming(file);
+		this.log(`"${file.basename}" shows its XWiki page (version ${state.remote.version}): it is in sync.`);
+		this.changed();
+		return true;
+	}
+
+	/** The note and its page as a pull would write it, for a comparison. */
+	private async loadComparison(client: XWikiClient, file: TFile | null, location: PageLocation): Promise<Comparison> {
+		const remote = await client.getPage(location);
+		const preview = remote ? await this.sync.previewPull(client, location, remote, file) : null;
+		return {
+			remote,
+			page: preview?.markdown ?? null,
+			attachments: preview?.attachments ?? new Set(),
+			note: file ? stripFrontmatter(await this.readNote(file)) : null,
+		};
+	}
+
+	/** The note as it is now: in its editor when it is open for editing, where it may not be saved yet. */
+	private async readNote(file: TFile): Promise<string> {
+		return this.openEditor(file)?.getValue() ?? (await this.app.vault.read(file));
+	}
+
+	private async confirmBlock(title: string, message: string): Promise<boolean> {
+		return (await choose(this.app, title, message, [
+			{ label: "Continue", value: true, warning: true },
+			{ label: "Cancel", value: false },
+		])) === true;
+	}
+
+	/**
+	 * Takes one block of the page into the note, as long as the note is still what was compared; the other lines of
+	 * the note stay as they are. Attachments the block links to are downloaded. Once the note shows all of the page,
+	 * it is in sync with it.
+	 */
+	private async pullBlock(client: XWikiClient, file: TFile, location: PageLocation, state: Comparison, range: BlockRanges): Promise<void> {
+		const { note, page, remote } = state;
+		if (note === null || page === null || !remote) return;
+		await this.exclusive(`pulling a change into "${file.basename}"`, async () => {
+			try {
+				const next = replaceLines(note, range.note, page, range.page);
+				let stale = false;
+				await this.changeNote(file, (whole) => {
+					const body = stripFrontmatter(whole);
+					if (body !== note) {
+						stale = true;
+						return whole;
+					}
+					return whole.slice(0, whole.length - body.length) + next;
+				});
+				if (stale) {
+					this.report(`"${file.basename}" changed since the comparison was opened. It was compared again: check the change and try once more.`, true);
+					return;
+				}
+				const taken = lines(page).slice(range.page[0], range.page[1]).join("\n");
+				const failed = await this.sync.fetchAttachments(client, location, file, [...state.attachments].filter((name) => taken.includes(name)));
+				if (failed.length > 0) this.report(`Could not download from XWiki: ${failed.join(", ")}`, true);
+				// The note shows the page: it is in sync with this version.
+				if (sameText(next, page)) await this.sync.recordSync(file, remote.version, location, { content: remote.content, body: next, comments: true, pulled: true });
+				this.log(`Pulled a change into "${file.basename}".`);
+			} catch (error) {
+				console.error("XWiki Publisher: pulling a change failed", error);
+				this.report(`Pulling the change failed: ${errorMessage(error)}`, true);
+			}
+		});
+	}
+
+	/**
+	 * Publishes one block of the note: the page as it was compared, with the lines of the note for that block. The
+	 * page is not overwritten if it changed since. The note is recorded as in sync with the new page only when that is
+	 * certain: the page was what the note was last synced with, or it now shows the whole note.
+	 */
+	private async publishBlock(client: XWikiClient, file: TFile, location: PageLocation, state: Comparison, range: BlockRanges): Promise<void> {
+		const { note, page, remote } = state;
+		if (note === null || page === null || !remote) return;
+		await this.exclusive(`publishing a change of "${file.basename}"`, async () => {
+			try {
+				if (stripFrontmatter(await this.readNote(file)) !== note) {
+					this.report(`"${file.basename}" changed since the comparison was opened. It was compared again: check the change and try once more.`, true);
+					return;
+				}
+				await this.ensureSyntaxAvailable(client, this.settings.syntax);
+				const body = replaceLines(page, range.page, note, range.note);
+				const record = this.syncState[file.path]?.version === remote.version || sameText(body, note);
+				const result = await this.publishNote(client, file, { mode: "overwrite", status: (message) => this.progress(message), body, expectedVersion: remote.version, record });
+				let message = `Published a change of "${file.basename}" to XWiki.`;
+				if (result.failed.length > 0) message += ` Failed to upload: ${result.failed.join(", ")}.`;
+				this.report(message, result.failed.length > 0);
+			} catch (error) {
+				console.error("XWiki Publisher: publishing a change failed", error);
+				this.report(`Publishing the change failed: ${errorMessage(error)}`, true);
+			}
+		});
+	}
+
+	/**
+	 * Undoes a change listed in the source control tab, after a confirmation: a modified note gets its page as it is on
+	 * XWiki, a deleted note is created again from its page, and a note never published, which XWiki has no copy of, is
+	 * moved to the trash. Returns whether the change was undone.
+	 */
+	async revertChange(change: NoteChange): Promise<boolean> {
+		if (this.busy) {
+			new Notice(`XWiki Publisher is busy: ${this.busy}`);
+			return false;
+		}
+		const name = noteBasename(change.path);
+		const question =
+			change.status === "added"
+				? `"${name}" was never published, so XWiki has no version of it to go back to. Move the note to the trash?`
+				: change.status === "deleted"
+					? `Create "${name}" again at ${change.path}, from its XWiki page ${change.note.reference}?`
+					: `Replace "${name}" with its XWiki page? Your changes since the last publish or pull are lost. If the page changed on XWiki since then, the note gets its current version.`;
+		const confirmed = await choose(this.app, "Revert changes", question, [
+			{ label: change.status === "added" ? "Move to trash" : "Revert", value: true, warning: true },
+			{ label: "Cancel", value: false },
+		]);
+		if (!confirmed) return false;
+		let reverted = false;
+		await this.exclusive(`reverting "${name}"`, async () => {
+			if (change.status === "added") {
+				await this.app.fileManager.trashFile(change.file);
+				this.report(`Moved "${name}" to the trash.`);
+				reverted = true;
+				return;
+			}
+			const client = this.clientOrNotice();
+			if (!client) return;
+			try {
+				const location = change.status === "deleted" ? change.note.location : this.locate(change.file);
+				const remote = await client.getPage(location);
+				if (!remote) {
+					this.report(`"${name}" cannot be reverted: its page ${serializeReference(location)} is no longer on XWiki.`, true);
+					return;
+				}
+				const file = change.status === "deleted" ? await this.sync.recreateNote(change.note) : change.file;
+				const result = await this.sync.pull(client, location, { file, interactive: false, force: true, remote, index: this.sync.buildIndex() });
+				reverted = isSettled(result.outcome);
+				if (reverted) this.settleIncoming(file);
+				this.report(reverted ? `Reverted "${name}" to XWiki version ${remote.version}.` : this.describeOutcome(result, name), !reverted);
+			} catch (error) {
+				console.error("XWiki Publisher: revert failed", error);
+				this.report(`Reverting "${name}" failed: ${errorMessage(error)}`, true);
+			}
+		});
+		return reverted;
+	}
+
+	/** Removes a note from the incoming notes once it was pulled or published. */
+	private settleIncoming(file: TFile): void {
+		if (!this.incoming) return;
+		const left = this.incoming.changes.filter((change) => change.file !== file);
+		if (left.length === this.incoming.changes.length) return;
+		this.incoming.changes = left;
+		this.changed();
+	}
+
+	/**
+	 * Compares every note that was published or pulled with its page on XWiki, and keeps the ones that a pull would
+	 * change, for the source control tab. Only pages are read: nothing in the vault or on XWiki changes.
+	 */
+	async checkIncoming(): Promise<void> {
+		await this.exclusive("Checking XWiki…", async () => {
+			const client = this.clientOrNotice();
+			if (!client) return;
+			this.sync.reconcileRecords();
+			const notes = this.publishableNotes().filter((file) => this.syncState[file.path]);
+			const changes: IncomingChange[] = [];
+			const failures = new Map<string, string[]>();
+			let checked = 0;
+			let failed = 0;
+			let cancelled = false;
+			this.cancellable = true;
+			const queue = [...notes];
+			const worker = async () => {
+				for (let file = queue.shift(); file; file = queue.shift()) {
+					if (this.cancelRequested) {
+						cancelled = true;
+						return;
+					}
+					const version = this.syncState[file.path]?.version ?? "";
+					try {
+						const remote = await client.getPage(this.locate(file));
+						const state = await this.sync.incomingState(file, remote);
+						if (state) changes.push({ path: file.path, file, state, version, remoteVersion: remote?.version });
+						checked++;
+					} catch (error) {
+						const message = errorMessage(error);
+						failures.set(message, [...(failures.get(message) ?? []), file.basename]);
+						failed++;
+					}
+					this.progress(`Checking XWiki ${checked + failed}/${notes.length}…`);
+				}
+			};
+			await Promise.all(Array.from({ length: Math.min(CHECK_CONCURRENCY, notes.length) }, worker));
+			this.incoming = {
+				time: Date.now(),
+				checked,
+				total: notes.length,
+				changes: changes.sort((a, b) => a.path.localeCompare(b.path)),
+				failures: [...failures].map(([message, names]) => `${names.join(", ")}: ${message}`),
+				cancelled,
+			};
+			const conflicts = changes.filter((change) => change.state.status === "conflict").length;
+			const missing = changes.filter((change) => change.state.status === "missing").length;
+			const behind = changes.length - missing;
+			const parts = [
+				behind === 0 ? "every note is up to date" : `${behind} note(s) to pull`,
+				conflicts > 0 ? `${conflicts} changed on both sides` : "",
+				missing > 0 ? `${missing} page(s) no longer on XWiki` : "",
+				failed > 0 ? `${failed} could not be checked: ${this.incoming.failures.join("; ")}` : "",
+				cancelled ? `${notes.length - checked - failed} not checked (cancelled)` : "",
+			].filter(Boolean);
+			this.report(`XWiki check of ${checked} note(s): ${parts.join("; ")}.`, failed > 0 || conflicts > 0, 10000);
+		});
+	}
+
+	/**
+	 * Pulls the selected incoming notes, parent pages first. Notes edited in the vault whose page changed too are
+	 * written next to the note (keep both) or over it, as the user chooses once for all of them.
+	 */
+	async pullIncoming(changes: IncomingChange[]): Promise<void> {
+		const pullable = changes.filter((change) => change.state.status !== "missing");
+		if (pullable.length === 0) return;
+		if (this.busy) {
+			new Notice(`XWiki Publisher is busy: ${this.busy}`);
+			return;
+		}
+		const conflicts = pullable.filter((change) => change.state.status === "conflict");
+		let conflict: "copy" | "overwrite" = "copy";
+		if (conflicts.length > 0) {
+			const names = conflicts.slice(0, 10).map((change) => change.file.basename);
+			if (conflicts.length > names.length) names.push(`and ${conflicts.length - names.length} more`);
+			const choice = await choose<"copy" | "overwrite" | null>(
+				this.app,
+				"Pull from XWiki",
+				`${conflicts.length} of the notes were edited in the vault, and their XWiki page changed too: ${names.join(", ")}. ` +
+					"Keep both writes the XWiki version next to each of them as a conflict copy. A note whose page only got new comments or attachments keeps its text either way.",
+				[
+					{ label: "Keep both", value: "copy", cta: true },
+					{ label: "Overwrite local notes", value: "overwrite", warning: true },
+					{ label: "Cancel", value: null },
+				],
+			);
+			if (!choice) return;
+			conflict = choice;
+		}
+		const files = this.publishOrder(pullable.map((change) => change.file));
+		const label = files.length === 1 ? `"${files[0].basename}"` : `${files.length} notes`;
+		await this.exclusive(`pulling ${label}`, () => this.doPullIncoming(files, label, conflict));
+	}
+
+	private async doPullIncoming(files: TFile[], label: string, conflict: "copy" | "overwrite"): Promise<void> {
+		const client = this.clientOrNotice();
+		if (!client) return;
+		const counts: Record<PullOutcome | "failed", number> = { created: 0, updated: 0, unchanged: 0, conflict: 0, missing: 0, cancelled: 0, failed: 0 };
+		const failures = new Map<string, string[]>();
+		const conflicts: string[] = [];
+		try {
+			this.cancellable = true;
+			const index = this.sync.buildIndex();
+			const titleCache = new Map<string, string>();
+			const claims = new Map<string, string>();
+			await this.sync.batch(async () => {
+				for (const [i, file] of files.entries()) {
+					if (this.cancelRequested) {
+						counts.cancelled += files.length - i;
+						break;
+					}
+					this.progress(`Pulling ${i + 1}/${files.length}: ${file.basename}`);
+					try {
+						const result = await this.sync.pull(client, this.locate(file), { file, interactive: false, conflict, index, titleCache, claims });
+						counts[result.outcome]++;
+						if (result.outcome === "conflict") conflicts.push(file.basename);
+						if (isSettled(result.outcome)) this.settleIncoming(file);
+					} catch (error) {
+						console.error(`XWiki Publisher: failed to pull ${file.path}`, error);
+						counts.failed++;
+						const message = errorMessage(error);
+						failures.set(message, [...(failures.get(message) ?? []), file.basename]);
+					}
+					await this.sync.checkpoint();
+				}
+			});
+		} finally {
+			const parts = [
+				`${counts.updated} updated`,
+				counts.unchanged > 0 ? `${counts.unchanged} already up to date` : "",
+				conflicts.length > 0 ? `${conflicts.length} kept with the XWiki version next to them: ${conflicts.join(", ")}` : "",
+				counts.missing > 0 ? `${counts.missing} no longer on XWiki` : "",
+				counts.failed > 0 ? `${counts.failed} failed: ${[...failures].map(([message, names]) => `${names.join(", ")}: ${message}`).join("; ")}` : "",
+				counts.cancelled > 0 ? `${counts.cancelled} not pulled (cancelled)` : "",
+			].filter(Boolean);
+			this.report(`XWiki pull of ${label} finished: ${parts.join("; ")}.`, counts.failed > 0 || conflicts.length > 0, 10000);
 		}
 	}
 

@@ -15,14 +15,20 @@ they keep their Markdown source and can travel both ways.
   below it.
 - Pages that are not written in Markdown (for example `xwiki/2.1`) are **converted to Markdown** when pulled;
   optionally their **XWiki macros are kept** so they keep working after publishing.
+- **Inline comments** made on XWiki are shown in the pulled note, on the text they were made on, and stay out of
+  what is published. You can comment on a text and reply to a comment from Obsidian too.
+- **Mentions** of XWiki users are shown in the note as links with the name of the user, published as the mentions
+  they were, and written in Obsidian by typing `@`.
 - The vault folder structure is **mirrored** as nested XWiki pages, and pulled pages recreate the XWiki page tree in
   the vault.
 - **Conflict protection** in both directions: nothing is overwritten silently when a note and its page both changed.
 - **Built-in folder notes**: XWiki pages that have children become folder notes, and selecting a folder in the file
   explorer shows the parent page's content. No other plugin is needed.
 - A **side panel** with every action, the note's target page, its sync state and recent activity.
-- A **Source control** tab that lists every note added, modified or deleted since its last sync, as a list or a folder
-  tree, and **publishes the selected changes** in one go, including deleting the pages of deleted notes.
+- A **Source control** tab that works both ways: it lists every note added, modified or deleted since its last sync,
+  as a list or a folder tree, and **publishes the selected changes** in one go, including deleting the pages of
+  deleted notes; and it **checks every note against XWiki**, lists the ones whose page is newer, and **pulls the
+  selected ones**.
 - **OpenProject links** (optional): published pages are linked to the work packages their notes link to, without
   duplicates, and the link is removed when it leaves the note.
 - Access tokens are kept in Obsidian's **secret storage**, never in the plugin's data file.
@@ -114,7 +120,58 @@ published or pulled; the **Refresh** button scans the vault again.
   in sync with their page are skipped, and pages changed on XWiki or not written in Markdown are skipped unless you
   choose to overwrite them. The result lists every skipped or failed note. Published notes leave the list. For notes
   marked **D**, see [Deleted notes](#deleted-notes).
-- **Recent activity** below the list shows the results of the latest operations, the same list as on the *XWiki* tab.
+
+Below it, **Incoming from XWiki** lists the notes that pulling would change: their page on XWiki is newer than the
+note. **Check XWiki** compares every note that was published or pulled with its page (it reads each page, four at a
+time, and can be cancelled from the panel); nothing is changed in the vault or on XWiki. The letter at the right of
+each row tells what was found, and its tooltip gives the versions:
+
+| Letter | Meaning |
+| --- | --- |
+| **U** (blue) | Updated on XWiki: the page has a newer version. Also when only comments or attachments are new (the text of the note stays), and for notes pulled before mentions were shown as links. |
+| **C** (red) | Changed on both sides: the page changed, and the note was edited since its last sync. |
+| **R** (grey) | Removed: the page is no longer on XWiki, or you cannot see it. It cannot be selected. |
+
+- The list shows the result of the last check; check again to update it. Notes that are pulled or published leave
+  it, and it follows notes that are renamed or deleted.
+- It has the same **folder view**, **checkboxes** (per note, and per folder for every note below it) and **Select all**
+  as *Changes*.
+- **Pull** pulls the selected notes, outermost pages first. When notes marked **C** are selected, you choose once for
+  all of them: *Keep both* writes the XWiki version next to each note as `<Note> (XWiki conflict).md`, *Overwrite
+  local notes* replaces them. A note whose page only got new comments or attachments keeps its text either way. The
+  result lists the notes kept as conflicts and the ones that failed.
+- Only notes already in the vault are checked: pages created on XWiki since are brought in by **Sync space**.
+
+**Show differences** (right-click a note in either list, or a folder that carries its folder note's letter) opens the
+note and its XWiki page side by side, the older version on the left: for *Changes*, the page on the left and the
+note on the right; for *Incoming from XWiki*, the note on the left and the page on the right. The page is shown as a
+pull would write it into the note (with its mentions and comments), so only real differences are marked: removed
+lines in red on the left, added lines in green on the right, and within a changed line the words that differ.
+Spacing does not count: Obsidian pads and aligns every cell of a table when one cell of it is edited, which would
+otherwise mark the whole table as changed; blank lines at the start of the note, or on one side only, do not count
+either. **Show spacing changes** marks spacing too. Unchanged parts are folded to
+a few lines around each change; select a fold, or **Show whole note**, to see them.
+Comparing only reads the page: nothing is pulled or published, until you use the buttons of a block.
+
+Each block of changes has its own bar, with what can be done with that block alone; the rest of the note and of the
+page stays as it is:
+
+| List | Buttons of a block |
+| --- | --- |
+| *Changes* | **Publish** sends this change to XWiki. **Revert** undoes it in the note, which gets the lines of the page back (what a pull would do). |
+| *Incoming from XWiki* | **Pull** takes this change into the note, with the attachments it links to. **Revert** undoes it on XWiki: the page gets the lines of the note back, published under your account. |
+
+Reverts ask first. Once the last block is taken, the comparison closes. A block is only taken when the note and the page are still what was compared; otherwise the
+comparison is done again and nothing is changed. The note counts as in sync with the page once nothing differs, or
+when the page was what the note was last synced with; until then, publishing or pulling the whole note still
+protects the other changes as usual. A block of a page that is not written in Markdown cannot be published alone.
+
+**Revert changes** (right-click a note under *Changes*, or the button in its comparison) undoes the change of the
+note, after a confirmation: a modified note (**M**) gets its page as it is on XWiki, losing the edits made since the
+last publish or pull; a deleted note (**D**) is created again at its path from its page; a note never published
+(**A**), which XWiki has no copy of, is moved to the trash, where Obsidian keeps it according to its *Deleted files*
+setting.
+- **Recent activity** below the lists shows the results of the latest operations, the same list as on the *XWiki* tab.
 
 ### Where a note is published
 
@@ -153,6 +210,7 @@ The page title is the note name, or the `xwiki-title` property when set.
 | `- [ ]`, `- [x]`, `- [X]` | `- ☐`, `- ☑`, `- ☒` |
 | `[^1]` footnotes, `^[inline footnotes]` | `{{footnote}}…{{/footnote}}`, listed at the end of the page |
 | `text ^block-id` | `text {{id name="block-id"/}}`, an anchor links can target |
+| `[@Jane Doe](https://wiki…/bin/view/XWiki/jdoe)`, a link to the profile of a user whose text starts with `@` | A mention of the user: `{{mention reference="XWiki.jdoe" style="FULL_NAME" anchor="…"/}}`; see [Mentions](#mentions) |
 | Single line breaks | Kept as line breaks when Obsidian shows them so (setting **Line breaks**) |
 | `~`, `^`, a line starting with `:` or `*[` | Escaped: Markdown 1.2 would read them as subscript, superscript, definition or abbreviation |
 | XWiki macros (`{{toc/}}`, `{{info}}…{{/info}}`) | Unchanged: Markdown 1.2 runs them like XWiki syntax does |
@@ -210,6 +268,94 @@ changes to Markdown and its macros are lost.
 - Inside a dedicated **Sync folder**, folders mirror XWiki spaces from the wiki root: a new note in `XWiki/Team/` is
   published below `Team`, not below the default space.
 
+### Mentions
+
+On XWiki a mention of a user is a macro, `{{mention reference="XWiki.jdoe" style="FULL_NAME" anchor="XWiki-jdoe-k3x9qa"/}}`.
+In a note it is a link to the profile of the user, with the name XWiki shows:
+
+```markdown
+[@Jane Doe](https://wiki.example.com/bin/view/XWiki/jdoe#XWiki-jdoe-k3x9qa)
+```
+
+- **Pulling** writes the mentions of a page as such links, also in a note pulled before, at its next pull. The name
+  is read from XWiki; when it cannot be read, the login is shown. **Opening** a note does the same for the mention
+  macros still in it, when *Update comments and mentions when a note is opened* is on.
+- **Publishing** writes each link back as the macro it was, character for character: the user, the style and the
+  anchor are in the address of the link (the anchor after `#`, a style other than the full name as `?style=`). The
+  text of the link is only for reading. XWiki notifies a user once for each anchor, so a published mention that did
+  not change notifies nobody again.
+- **To mention a user**, type `@` and the start of a name or login in a note that has an XWiki page, and choose the
+  user from the list (setting **Suggest users to mention**; what is typed after the `@` is sent to XWiki to find
+  the users). The command *Mention an XWiki user* and the editor menu do the same from a search box. A link written
+  by hand works too: any link to a user profile whose text starts with `@`.
+- A mention written in Obsidian has no anchor yet. Publishing gives it one, made like those of the XWiki editor,
+  and XWiki notifies the user. The anchor is then written into the link in the note (`…/XWiki/jdoe#XWiki-jdoe-k3x9qa`),
+  so the mention keeps it when other mentions are added before it, and nobody is notified twice. Notes published
+  before this get their anchors when they are opened, for the mentions whose macro the page has.
+- Mentions that are not written the way the XWiki editor writes them (other parameters, users of another wiki,
+  groups) stay macros in the note and are published as they are.
+
+### Inline comments
+
+On XWiki, a comment can be made on a selection of the page text (*Annotate*). XWiki keeps such comments next to the
+page, not in its content, so pulling shows them in the note with marks of its own (setting **Inline comments**):
+
+```markdown
+The budget of ==💬1.2M for Q3==[^xwiki-3] was approved.
+
+[^xwiki-3]: 💬 **Jane Doe** · 2026-11-20 14:03: Is this still right?<br>↳ **John Roe** · 2026-11-21 09:10: Yes.
+```
+
+- The commented text is highlighted, starting with 💬, and followed by a footnote reference. The footnote holds the
+  comment and the replies to it, with their authors and dates.
+- Text that a highlight cannot wrap as it is (a selection that crosses formatting, a link, code or several lines)
+  only gets the reference, and its footnote starts with the commented text.
+- Comments whose text is not found in the note (it changed since, appears several times, or is in a heading or a
+  code block) are referenced on a `💬` line after the text, so no comment is left out.
+- **Nothing of this is published.** The marks are removed before a note is sent to XWiki, so the page content stays
+  what it was and the comments on XWiki stay attached to their text. They do not count as an edit of the note
+  either: a note that only shows new comments is still in sync.
+- Comments are read when the page changed (a new comment gives it a new version), and at the next pull of a note
+  that was synced before this was available or published since. Pulling a note you edited keeps your text and
+  refreshes the comments in it.
+- Comments on the page as a whole are not pulled.
+- The footnote reference after a commented text (`[^xwiki-3]`) is hidden where the note is shown, in the reading
+  view, in Live Preview and in table cells: the 💬 icon stands for it. In Live Preview it shows again where the cursor
+  is, to be edited; the file always keeps it.
+- **Selecting the 💬 icon** of a commented text, of the line of comments without a place, or of a footnote shows the
+  comment and its replies in a popover, in the reading view, in Live Preview and in table cells alike, as XWiki has
+  them now. Every comment and reply has its own **Reply** and **Delete** buttons; the comment also has **Resolve**.
+  The rest of the highlighted text places the cursor as usual.
+- On a wiki with comment resolution (the `Tools.CommentResolve` service), **resolved comments are shown too**, with the
+  ✅ icon instead of 💬 and a faded highlight (`==✅text==`), their footnote starting with
+  `✅ Resolved by <name> · <date>`. A comment resolved or reopened on XWiki is updated the next
+  time the note is opened. **Resolve** in the popover resolves a comment, when you may resolve comments of the page;
+  on a resolved comment it is **Reopen**. **Resolved XWiki comments** (editor menu, or the command *Show resolved
+  XWiki comments of the note*) lists the resolved comments of the note with who resolved them, to reopen them.
+- **Delete** removes that comment or reply and the replies below it on XWiki, for everyone, after a confirmation that
+  says how many replies go with it. It needs *edit* right on the page.
+- In the comment and reply boxes, typing `@` and the start of a name lists the XWiki users: the chosen one shows as
+  `@Name` and is sent as an XWiki mention, so XWiki notifies them. Mentions in pulled comments show as links with the
+  names of the users.
+- **Opening a note** updates its comments too, in the background (setting **Update comments and mentions when a note
+  is opened**): the plugin reads the page, at most every two minutes per note, and shows the comments it has now.
+  This takes one request when nothing changed, and never changes the text of the note: when the page text changed
+  on XWiki, a notice asks you to pull it. A note open for editing is changed in its editor, so nothing being typed
+  is lost.
+
+To comment from Obsidian, in a note that was published or pulled:
+
+- **Comment on XWiki** (editor context menu, or the command *Comment on the selected text on XWiki*): select text,
+  write the comment, and it is added to the page as an inline comment on that text.
+- **Reply to XWiki comment** (editor context menu, or the command *Reply to the XWiki comment at the cursor*): with
+  the cursor on a commented text or on its footnote, write the reply.
+
+Both are sent right away under your XWiki account, like a comment made on XWiki, not with the next publish; the note
+then shows the comments of the page again. The selected text must be on the page: publish the note first when the
+text is new. A comment needs *comment* right on the page, a reply needs *edit* right. The marks in the note belong to
+the plugin: text typed into them is not sent, and the next pull writes them again from what is on XWiki. Comments
+are edited, deleted and resolved on XWiki.
+
 ### Folder notes
 
 In XWiki a page can have content *and* child pages. In the vault, its children live in a folder, and the page itself
@@ -248,10 +394,15 @@ Folder notes are also respected when publishing:
 ### Conflicts
 
 After each publish or pull, the plugin remembers the page version and a fingerprint of the note's body. Editing the
-note's properties, or links that Obsidian rewrites when the plugin moves a file, do not count as local changes.
+note's properties, links that Obsidian rewrites when the plugin moves a file, and spacing (Obsidian aligning the
+cells of a table, blank lines) do not count as local changes. A note listed as modified by an earlier version only
+because of spacing is in sync again when it is next opened, or compared (**Show differences**): the plugin checks
+that it shows its page, spacing aside.
 
 - **Pull**: when the note and the page both changed, you choose between *Keep both* and *Overwrite local note*.
   **Sync** keeps your note and writes the XWiki version next to it as `<Note> (XWiki conflict).md`.
+  A page whose content is what it was at the last sync did not change in this sense: a new comment or attachment on
+  it is pulled into the note you are editing, without a conflict.
 - **Publish**: when the page changed on XWiki since the last sync, you are asked before it is overwritten.
 - **Publish folder** and **Publish** in the *Source control* tab: notes in sync with their page are skipped. Pages
   changed on XWiki since the last sync, or not written in Markdown, are skipped and listed in the result, unless you
@@ -345,11 +496,14 @@ in OpenProject by hand.
 | Markdown syntax | `markdown/1.2` | Syntax id the pages are saved with. |
 | Line breaks | Same as Obsidian | Publish single line breaks as line breaks (unless Obsidian's *Strict line breaks* is on), always, or never. |
 | Obsidian comments | Remove | Remove `%%comments%%`, or keep them as `{{comment}}` macros: hidden on the page, visible in its source. |
+| Suggest users to mention | On | List the matching XWiki users while `@` and a name are typed in a note that has a page. |
 | Upload attachments | On | Upload embedded images and linked files. |
 | Save page URL in note | On | Write `xwiki-url` to the note. |
 | **Sync** | | |
 | Sync folder | Vault root | Where the XWiki page tree is recreated. |
 | Attachment folder | `assets` | Subfolder next to each pulled note for its attachments; empty uses Obsidian's attachment location. |
+| Inline comments | On | Show the inline comments of a page in its pulled note; they are never published. |
+| Update comments and mentions when a note is opened | On | Read the page of an opened note in the background and show its current comments and its mentions as links; the text is never changed. |
 | Keep XWiki macros | Off | Convert XWiki syntax pages from their source and keep their macros. |
 | **Folder notes** | | |
 | Folder note location | Inside the folder | Inside (`X/X.md`) or next to the folder (`X.md`). |
@@ -365,6 +519,12 @@ in OpenProject by hand.
   separate XWiki extensions. Foldable callouts are shown open on XWiki.
 - With comments removed (the default), a note pulled after its page was edited on XWiki loses its `%%comments%%`.
   Keep them as `{{comment}}` macros to avoid this, knowing that page editors can read them.
+- Inline comments are added and answered with the commands of the plugin; text typed into the marks of a note is
+  not sent to XWiki, and is replaced at the next pull. Comments cannot be edited or deleted from Obsidian. After
+  publishing a note, pull it to see its comments where XWiki now has them.
+- A link to a user profile whose text starts with `@` is published as a mention, and XWiki notifies that user.
+  Mentions of pages that are converted from their rendered view (not written in Markdown, **Keep XWiki macros**
+  off) are published with their anchors, but always with the full name style.
 - Converting a non-Markdown page is lossy. By default macros are kept as their rendered output (for example links),
   and publishing such a note replaces the page's macros with that output. With **Keep XWiki macros** on, macros are
   kept, but formatting without a Markdown equivalent (CSS classes, `(% %)` parameters) is lost; underline,
@@ -383,9 +543,14 @@ in OpenProject by hand.
 ## Privacy, network use and accounts
 
 - **Network use**: the plugin only talks to the XWiki server you configure, and only when you run an action (test
-  connection, publish, pull, import, sync, check). It sends the notes you publish and their attachments, and
-  downloads the pages you pull with their attachments. It deletes a page only when you select its deleted note in the
-  *Source control* tab, publish and confirm. If you configure OpenProject, it also talks to that server,
+  connection, publish, pull, import, sync, check, comment, mention), when you open a note that has an XWiki page (to
+  show its current comments and mentions; setting **Update comments and mentions when a note is opened**), and to
+  list the users to mention while you type
+  `@` and a name in a note that has an XWiki page (setting **Suggest users to mention**). It sends the notes you
+  publish and their attachments, the comments and replies you write with its comment commands, and what you type
+  to find a user; it downloads the pages you pull with their attachments and comments, and the names of the users
+  they mention. It deletes a page only when you select its deleted note in the *Source control* tab,
+  publish and confirm. If you configure OpenProject, it also talks to that server,
   when you test the connection and when you publish a note with work package links: it sends the work package numbers
   and the page's identifier, never the note's content.
 - **Account**: an XWiki account and an access token for it are required. OpenProject links need an OpenProject account

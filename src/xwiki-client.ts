@@ -1,4 +1,6 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { CommentResolutions, CommentSelection, PageSelection, parseAnnotationAnswer, parseComments, parseResolutions, parseSelections, RemoteComment } from "./inline-comments";
+import { MentionUser, parseUsers } from "./mentions";
 import { PageLocation, parseReference, parseXWikiUrl, serializeReference, serializeSpaceReference, splitSpaceReference, XWikiUrl } from "./location";
 import { collectSyntaxIds } from "./syntaxes";
 import { normalizeToken } from "./token";
@@ -76,6 +78,11 @@ function utf8ToBase64(value: string): string {
 }
 
 export class XWikiClient {
+	/** Token XWiki wants back with a form it is sent; every answer of its REST API carries it. */
+	private formToken?: string;
+	/** Names of users already asked for, by reference: a sync mentions the same users on many pages. */
+	private readonly userNames = new Map<string, Promise<string | undefined>>();
+
 	constructor(private readonly connection: XWikiConnection) {}
 
 	private get base(): string {
@@ -138,6 +145,7 @@ export class XWikiClient {
 	): Promise<RequestUrlResponse> {
 		const { allowNotFound = false, timeoutMs = 60_000 } = options;
 		const response = await this.withTimeout(requestUrl({ ...params, throw: false }), params.url, timeoutMs);
+		this.formToken = header(response.headers, "xwiki-form-token") ?? this.formToken;
 		if (allowNotFound && response.status === 404) return response;
 		if (response.status >= 400) {
 			// Never log request headers: they contain the token.
@@ -284,6 +292,174 @@ export class XWikiClient {
 			},
 			(attachment) => attachment.name,
 		);
+	}
+
+	/** Comments of a page, replies included, with the names of their authors. */
+	async listComments(location: PageLocation): Promise<RemoteComment[]> {
+		return this.listAll(`${this.pageRestUrl(location)}/comments?prettyNames=true`, parseComments, (comment) => String(comment.id));
+	}
+
+	/**
+	 * Text each inline comment (annotation) of a page is attached to, by comment id. XWiki keeps it in the comment
+	 * objects of the page, which the comment listing does not show.
+	 */
+	async getCommentSelections(location: PageLocation): Promise<Map<number, CommentSelection>> {
+		const url = `${this.pageRestUrl(location)}?objects=true`;
+		const response = await this.send({ url, method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		return response.status === 404 ? new Map() : parseSelections(this.json(response, url));
+	}
+
+	/**
+	 * XWiki's user search, the one its editor lists users from after `@`. It is a page template, asked through
+	 * `page`, which must be a page the user can view.
+	 */
+	private async suggestUsers(page: PageLocation, parameters: Record<string, string>): Promise<MentionUser[]> {
+		const query = Object.entries({ xpage: "uorgsuggest", media: "json", uorg: "user", ...parameters })
+			.map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+			.join("&");
+		const url = `${this.viewUrl(page).replace("/bin/view/", "/bin/get/")}?${query}`;
+		const response = await this.send({ url, method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } });
+		return parseUsers(this.json(response, url));
+	}
+
+	/** Users whose login or name contains `input`, in the order XWiki suggests them for a mention. */
+	searchUsers(page: PageLocation, input: string, limit = 8): Promise<MentionUser[]> {
+		return this.suggestUsers(page, { input, limit: String(limit) });
+	}
+
+	/** Name of a user as XWiki shows it, by the reference of a mention; `undefined` when it cannot be read. */
+	userName(page: PageLocation, reference: string): Promise<string | undefined> {
+		let name = this.userNames.get(reference);
+		if (!name) {
+			name = this.suggestUsers(page, { input: reference, exactMatch: "true" }).then(
+				(users) => users.find((user) => user.reference === reference)?.name,
+				() => undefined,
+			);
+			this.userNames.set(reference, name);
+		}
+		return name;
+	}
+
+	private annotationsUrl(location: PageLocation): string {
+		return `${this.pageRestUrl(location)}/annotations`;
+	}
+
+	/**
+	 * The page as XWiki renders it for commenting: the HTML whose text its inline comments are attached to. The page
+	 * must exist.
+	 */
+	async getAnnotatedHtml(location: PageLocation): Promise<string> {
+		const url = this.annotationsUrl(location);
+		const response = await this.send({ url, method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		if (response.status === 404) throw new XWikiError("XWiki has no annotations API: inline comments cannot be added from here.");
+		const answer = parseAnnotationAnswer(this.json(response, url));
+		if (!answer.ok) throw new XWikiError(`XWiki could not render the page for commenting: ${answer.message || "no reason given"}`);
+		return answer.html;
+	}
+
+	/**
+	 * Adds an inline comment (annotation) on a text of the page, as the signed-in user. Sent like XWiki's own comment
+	 * dialog does: as a form, which XWiki accepts with the token it gave in an earlier answer. Needs comment right.
+	 */
+	async addAnnotation(location: PageLocation, target: PageSelection, text: string): Promise<void> {
+		const url = this.annotationsUrl(location);
+		// Any answer of the REST API carries the token; versions that do not ask for one do not send one.
+		if (!this.formToken) await this.send({ url: this.pageRestUrl(location), method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		const form = { selection: target.selection, selectionContext: target.context, selectionOffset: String(target.offset), comment: text };
+		const response = await this.send({
+			url,
+			method: "POST",
+			contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+			headers: { ...this.authHeaders(), Accept: "application/json", ...(this.formToken ? { "XWiki-Form-Token": this.formToken } : {}) },
+			body: Object.entries(form)
+				.map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+				.join("&"),
+		});
+		const answer = parseAnnotationAnswer(this.json(response, url));
+		if (!answer.ok) throw new XWikiError(`XWiki did not save the comment: ${answer.message || "no reason given"}`);
+	}
+
+	/** Page of the wiki that tells which comments are resolved, on wikis that have comment resolution. */
+	private resolutionUrl(location: PageLocation): string {
+		const page = `${this.connection.wiki}:${serializeReference(location)}`;
+		return `${this.base}/bin/get/Tools/CommentResolve/?xpage=plain&outputSyntax=plain&page=${encodeURIComponent(page)}`;
+	}
+
+	/** Whether the wiki has comment resolution; asked once. */
+	private resolutionSupported?: boolean;
+
+	/**
+	 * Which comments of a page are resolved, from the wiki's comment resolution service; `null` when the wiki has
+	 * none, which is then not asked again.
+	 */
+	async getCommentResolutions(location: PageLocation): Promise<CommentResolutions | null> {
+		if (this.resolutionSupported === false) return null;
+		const url = this.resolutionUrl(location);
+		const response = await this.send({ url, method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		let resolutions: CommentResolutions | null = null;
+		if (response.status !== 404) {
+			try {
+				resolutions = parseResolutions(response.json);
+			} catch {
+				resolutions = null;
+			}
+		}
+		this.resolutionSupported = resolutions !== null;
+		return resolutions;
+	}
+
+	/**
+	 * Resolves or reopens an inline comment through the wiki's comment resolution service, as its comment panel does:
+	 * a form, sent with the token XWiki gave in an earlier answer. Returns the resolution state of the page after it.
+	 */
+	async setCommentResolved(location: PageLocation, id: number, resolved: boolean): Promise<CommentResolutions> {
+		// Any answer of the REST API carries the token.
+		if (!this.formToken) await this.send({ url: this.pageRestUrl(location), method: "GET", headers: { ...this.authHeaders(), Accept: "application/json" } }, { allowNotFound: true });
+		const form: Record<string, string> = { action: "set", id: String(id), resolved: resolved ? "1" : "0", form_token: this.formToken ?? "" };
+		const url = this.resolutionUrl(location);
+		const response = await this.send({
+			url,
+			method: "POST",
+			contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+			headers: { ...this.authHeaders(), Accept: "application/json", ...(this.formToken ? { "XWiki-Form-Token": this.formToken } : {}) },
+			body: Object.entries(form)
+				.map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+				.join("&"),
+		});
+		let state: CommentResolutions | null = null;
+		try {
+			state = parseResolutions(response.json);
+		} catch {
+			state = null;
+		}
+		if (!state) throw new XWikiError("XWiki did not answer as its comment resolution service does: the comment may not be resolved.");
+		if (state.resolved.has(id) !== resolved) throw new XWikiError(resolved ? "XWiki did not resolve the comment." : "XWiki did not reopen the comment.");
+		return state;
+	}
+
+	/** Deletes a comment of a page (its object); one that is already gone is not an error. Needs edit right. */
+	async deleteComment(location: PageLocation, id: number): Promise<void> {
+		await this.send(
+			{ url: `${this.pageRestUrl(location)}/objects/XWiki.XWikiComments/${id}`, method: "DELETE", headers: { ...this.authHeaders(), Accept: "application/json" } },
+			{ allowNotFound: true },
+		);
+	}
+
+	/** Adds a comment to a page as the signed-in user, as a reply to the comment `replyTo`. Needs edit right. */
+	async addComment(location: PageLocation, text: string, replyTo?: number): Promise<void> {
+		const body =
+			'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+			'<comment xmlns="http://www.xwiki.org">' +
+			`<text>${escapeXml(text)}</text>` +
+			(replyTo === undefined ? "" : `<replyTo>${replyTo}</replyTo>`) +
+			"</comment>";
+		await this.send({
+			url: `${this.pageRestUrl(location)}/comments`,
+			method: "POST",
+			contentType: "application/xml; charset=UTF-8",
+			headers: { ...this.authHeaders(), Accept: "application/xml" },
+			body,
+		});
 	}
 
 	/**

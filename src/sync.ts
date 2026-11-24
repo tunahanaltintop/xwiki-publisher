@@ -1,8 +1,10 @@
 import { App, getLinkpath, normalizePath, Notice, TAbstractFile, TFile, TFolder } from "obsidian";
-import { stripFrontmatter } from "./converter";
+import { stripFrontmatter, stripInlineComments, transformOutsideCode } from "./converter";
 import { DeletedNote, deletedNotes } from "./deletions";
+import { lineKey, lines } from "./diff";
 import { contentHash } from "./hash";
 import { xwikiHtmlToMarkdown } from "./html";
+import { addInlineComments, CommentResolutions, commentThreads, CommentThread, isNextVersion, shownResolved } from "./inline-comments";
 import {
 	attachmentFolderFor,
 	FM_REFERENCE,
@@ -25,6 +27,7 @@ import {
 	serializeReference,
 	vaultPathFor,
 } from "./location";
+import { anchorMentionLinks, mentionLink, mentionLogin, mentionNames, mentionReferences, mentionsToLinks } from "./mentions";
 import { choose } from "./modals";
 import { convertFromXWiki, extractMarkdown, ReverseTarget, XWIKI_IMAGE, XWIKI_LINK } from "./reverse";
 import { hardLineBreaks, type XWikiPublisherSettings } from "./settings";
@@ -47,6 +50,87 @@ export interface SyncRecord {
 	reference?: string;
 	/** Attachments of the page that could not be downloaded at the last pull; the next pull or sync tries them again. */
 	missingAttachments?: string[];
+	/**
+	 * The note shows the inline comments its page has at `version`. Without it (a note synced before comments were
+	 * pulled or while that was off, or published since), the next pull reads them even when the page did not change.
+	 */
+	comments?: true | number;
+	/**
+	 * Hash of the content of the page at `version`. The page may get a new version without a new text (a comment, an
+	 * attachment): edits of the note do not conflict with that.
+	 */
+	remoteHash?: string;
+	/**
+	 * `PULL_FORMAT` of the pull that last wrote the note. A note written by an earlier one is brought up to date at
+	 * the next pull when its page has something that is pulled differently now, even when the page did not change.
+	 */
+	format?: number;
+}
+
+/**
+ * Generation of what a pull writes into a note. 2: mention macros are pulled as links to the profiles of the users.
+ */
+const PULL_FORMAT = 2;
+
+/**
+ * Generation of how the inline comments of a page are shown in its note, kept in `SyncRecord.comments`. 2: resolved
+ * comments are shown, marked resolved; before, they were left out. A note that shows them the way of an earlier
+ * generation reads them again at its next pull or opening, even when the page did not change.
+ */
+const COMMENTS_FORMAT = 2;
+
+/** Whether the note shows the comments of its page as this version shows them, at the version of its record. */
+function commentsCurrent(record: SyncRecord): boolean {
+	return record.comments === COMMENTS_FORMAT;
+}
+
+/** Whether a page has something that a note written by an earlier pull shows differently. */
+function pulledDifferently(record: SyncRecord, remote: RemotePage): boolean {
+	return (record.format ?? 1) < PULL_FORMAT && remote.content.includes("{{mention");
+}
+
+/** Why pulling a note would change it, as found by comparing its record with its page on XWiki. */
+export type IncomingReason =
+	/** The content of the page changed. */
+	| "content"
+	/** Only comments or attachments changed: the page has a new version, but the same content. */
+	| "comments"
+	/** The page did not change, but the note shows it the way an earlier version of the plugin pulled it. */
+	| "format"
+	/** Attachments of the page that could not be downloaded at the last pull are still missing. */
+	| "attachments";
+
+export type IncomingState =
+	| { status: "updated"; reason: IncomingReason }
+	/** The content of the page changed, and the note was edited since its last sync. */
+	| { status: "conflict"; reason: "content" }
+	/** The page is no longer on XWiki, or cannot be seen anymore. */
+	| { status: "missing" };
+
+/** What showing the comments and mentions of a page in its open note found. */
+export interface ShownRefresh {
+	/** The note was changed. */
+	changed: boolean;
+	/** Version of the page on XWiki now. */
+	version: string;
+	/** The content of the page changed since the last sync: a pull would change the text of the note. */
+	pageChanged: boolean;
+}
+
+/** What a sync leaves in the record of a note, besides the version of its page. */
+interface SyncDetails {
+	/** The plugin placed the note where it is now. */
+	placed?: boolean;
+	/** Attachments still to fetch; a publish does not download anything and keeps the ones recorded. */
+	missing?: string[];
+	/** The note shows the comments the page has at that version. A publish may move them, so they are read again. */
+	comments?: boolean;
+	/** Content of the page at that version. */
+	content?: string;
+	/** A pull wrote the note, or found it as it would write it. */
+	pulled?: boolean;
+	/** The text the note and the page agree on, when it is not the note: only part of the note was published. */
+	body?: string;
 }
 
 export type SyncState = Record<string, SyncRecord>;
@@ -103,6 +187,13 @@ interface PullOptions {
 	parents?: Set<string>;
 	/** Vault names given to pages during this run, by path: two pages with the same title get distinct names. */
 	claims?: Map<string, string>;
+	/** Without `interactive`: on a conflict, write the XWiki version next to the note (default), or over it. */
+	conflict?: "copy" | "overwrite";
+	/**
+	 * Write the page into the note even when the record says that the note is up to date or edited: reverts the note
+	 * to its page.
+	 */
+	force?: boolean;
 }
 
 /** Attachment names can contain characters that are not allowed in vault file names. */
@@ -113,8 +204,29 @@ function sanitizeAttachmentName(name: string): string {
 /** During a long sync, the progress made so far is saved this often, so an interrupted sync resumes where it stopped. */
 const CHECKPOINT_MS = 10_000;
 
+/** Start of the fingerprints that leave spacing out; fingerprints written by earlier versions do not have it. */
+const SPACING_FREE = "s1:";
+
+/** A note's own text: the comments of its page shown in it are not an edit of the note. */
+function ownText(text: string): string {
+	return stripInlineComments(stripFrontmatter(text));
+}
+
+/**
+ * Fingerprint of a note's own text, spacing left out like in comparisons (see `lineKey`): Obsidian pads and aligns
+ * the cells of a table when one of them is edited, and blank lines do not change what Markdown shows.
+ */
 function bodyHash(text: string): string {
-	return contentHash(stripFrontmatter(text).trim());
+	const shown = lines(ownText(text))
+		.map(lineKey)
+		.filter((line) => line !== "")
+		.join("\n");
+	return SPACING_FREE + contentHash(shown);
+}
+
+/** Whether `text` is the note a fingerprint was made of, as this version or an earlier one made it. */
+function matchesBody(fingerprint: string, text: string): boolean {
+	return fingerprint.startsWith(SPACING_FREE) ? fingerprint === bodyHash(text) : fingerprint === contentHash(ownText(text).trim());
 }
 
 export class SyncService {
@@ -215,18 +327,20 @@ export class SyncService {
 	 * Records that the note and the page at `location` agree, at the page's `version`. The location is given, not read
 	 * from the note, because the properties of a note that was just written are not in the metadata cache yet.
 	 */
-	async recordSync(file: TFile, version: string, location: PageLocation, placed = false, missing?: string[]): Promise<void> {
+	async recordSync(file: TFile, version: string, location: PageLocation, details: SyncDetails = {}): Promise<void> {
 		const previous = this.host.syncState[file.path];
 		const reference = serializeReference(location);
 		this.dropDeleted(reference);
 		this.host.syncState[file.path] = {
 			version,
-			bodyHash: bodyHash(await this.app.vault.read(file)),
+			bodyHash: bodyHash(details.body ?? (await this.app.vault.read(file))),
 			reference,
 			// Notes synced before placement was recorded count as placed where they are now.
-			placedAt: placed ? file.path : (previous?.placedAt ?? file.path),
-			// A publish does not download anything: it keeps the attachments still to fetch.
-			missingAttachments: missing === undefined ? previous?.missingAttachments : missing.length > 0 ? missing : undefined,
+			placedAt: details.placed ? file.path : (previous?.placedAt ?? file.path),
+			missingAttachments: details.missing === undefined ? previous?.missingAttachments : details.missing.length > 0 ? details.missing : undefined,
+			comments: details.comments ? COMMENTS_FORMAT : undefined,
+			remoteHash: details.content === undefined ? previous?.remoteHash : contentHash(details.content),
+			format: details.pulled ? PULL_FORMAT : previous?.format,
 		};
 		await this.save();
 	}
@@ -278,12 +392,36 @@ export class SyncService {
 		if (changed) void this.save();
 	}
 
+	/** Whether the record of a note has a fingerprint of an earlier version, which counted spacing as an edit. */
+	hasOldFingerprint(file: TFile): boolean {
+		const fingerprint = this.host.syncState[file.path]?.bodyHash;
+		return fingerprint !== undefined && !fingerprint.startsWith(SPACING_FREE);
+	}
+
 	/** Whether the note was edited since it was last published or pulled. */
 	isLocallyChanged(file: TFile, text: string): boolean {
 		const record = this.host.syncState[file.path];
 		if (!record) return true;
-		if (record.bodyHash !== undefined) return record.bodyHash !== bodyHash(text);
+		if (record.bodyHash !== undefined) return !matchesBody(record.bodyHash, text);
 		return record.hash !== contentHash(text);
+	}
+
+	/**
+	 * Whether pulling a note would change it, from its page as XWiki has it now (`null`: the page is gone), without
+	 * converting anything. `null` when the note is up to date, or was never synced.
+	 */
+	async incomingState(file: TFile, remote: RemotePage | null): Promise<IncomingState | null> {
+		const record = this.host.syncState[file.path];
+		if (!record) return null;
+		if (!remote) return { status: "missing" };
+		if (record.version === remote.version) {
+			if (pulledDifferently(record, remote)) return { status: "updated", reason: "format" };
+			return record.missingAttachments?.length ? { status: "updated", reason: "attachments" } : null;
+		}
+		if (record.remoteHash !== undefined && record.remoteHash === contentHash(remote.content)) return { status: "updated", reason: "comments" };
+		// Records of earlier versions do not have the content of the page: an edited note may conflict, and the pull
+		// finds out, comparing the page with the note as it was at the last sync.
+		return this.isLocallyChanged(file, await this.app.vault.cachedRead(file)) ? { status: "conflict", reason: "content" } : { status: "updated", reason: "content" };
 	}
 
 	/** Version of the page at the last sync of the note, if any. */
@@ -798,6 +936,225 @@ export class SyncService {
 		}
 	}
 
+	/** The inline comment `id` of a page with its replies, as XWiki has it now; `null` when it is gone. */
+	async commentThread(client: XWikiClient, location: PageLocation, remote: RemotePage, id: number): Promise<CommentThread | null> {
+		return (await this.commentThreadsOf(client, location, remote)).find((thread) => thread.id === id) ?? null;
+	}
+
+	/** Which comments of a page are resolved; `null` on a wiki without comment resolution, or when it cannot be read. */
+	private async resolutions(client: XWikiClient, location: PageLocation): Promise<CommentResolutions | null> {
+		try {
+			return await client.getCommentResolutions(location);
+		} catch (error) {
+			console.debug("XWiki Publisher: could not read which comments are resolved", error);
+			return null;
+		}
+	}
+
+	/**
+	 * Inline comments of a page, with their replies; `undefined` when comments are not pulled or could not be read.
+	 * A page that has no comments at all costs one request.
+	 */
+	/**
+	 * All the inline comments of a page with their replies, resolved ones included, as XWiki has them now. Mentions in
+	 * them are shown like those of the page: links with the names of the users.
+	 */
+	async commentThreadsOf(client: XWikiClient, location: PageLocation, remote: RemotePage): Promise<CommentThread[]> {
+		const comments = await client.listComments(location);
+		if (comments.length === 0) return [];
+		const references = [...new Set(comments.flatMap((comment) => mentionReferences(comment.text)))];
+		const names = await this.userNames(client, location, references, "");
+		const baseUrl = this.host.settings.baseUrl;
+		const mention = (reference: string) => {
+			const name = names.get(reference) ?? mentionLogin(reference);
+			return name ? (mentionLink(baseUrl, { reference, style: "FULL_NAME" }, name) ?? undefined) : undefined;
+		};
+		return commentThreads(comments, await client.getCommentSelections(location), remote.syntax, mention, await this.resolutions(client, location));
+	}
+
+	private async pageComments(client: XWikiClient, location: PageLocation, remote: RemotePage, interactive: boolean): Promise<CommentThread[] | undefined> {
+		if (!this.host.settings.inlineComments) return undefined;
+		try {
+			return await this.commentThreadsOf(client, location, remote);
+		} catch (error) {
+			// The page itself can still be pulled; its comments are read again at the next pull.
+			console.warn(`XWiki Publisher: could not read the comments of ${serializeReference(location)}`, error);
+			if (interactive) new Notice(`Could not read the comments of "${pageDisplayName(location)}": ${error instanceof Error ? error.message : String(error)}`);
+			return undefined;
+		}
+	}
+
+	/**
+	 * Names of mentioned users, by reference: XWiki is asked for them, and `note`, the note as it is, for the ones
+	 * XWiki cannot give, so that a name already shown does not turn into a login.
+	 */
+	private async userNames(client: XWikiClient, location: PageLocation, references: string[], note: string): Promise<Map<string, string>> {
+		const names = new Map<string, string>();
+		if (references.length === 0) return names;
+		const shown = mentionNames(note, this.host.settings.baseUrl);
+		const asked = await Promise.all(references.map((reference) => client.userName(location, reference)));
+		references.forEach((reference, i) => {
+			const name = asked[i] ?? shown.get(reference);
+			if (name) names.set(reference, name);
+		});
+		return names;
+	}
+
+	/**
+	 * Writes the mention macros of a note as links, in a note that an earlier version pulled or that was typed with
+	 * macros; the rest of its text stays as it is. The links are published as the macros they were, so a note that
+	 * was in sync still is. Returns whether the note was changed.
+	 */
+	private async refreshMentions(client: XWikiClient, location: PageLocation, file: TFile, record: SyncRecord): Promise<boolean> {
+		const baseUrl = this.host.settings.baseUrl;
+		const before = await this.app.vault.read(file);
+		const edited = this.isLocallyChanged(file, before);
+		const names = await this.userNames(client, location, mentionReferences(stripFrontmatter(before)), before);
+		let changed = false;
+		await this.app.vault.process(file, (data) => {
+			const body = stripFrontmatter(data);
+			const next = transformOutsideCode(body, (text) => mentionsToLinks(text, baseUrl, (reference) => names.get(reference)));
+			changed = next !== body;
+			return changed ? this.replaceBody(data, next) : data;
+		});
+		if (changed && !edited) {
+			record.bodyHash = bodyHash(await this.app.vault.read(file));
+			record.hash = undefined;
+		}
+		record.format = PULL_FORMAT;
+		await this.save();
+		return changed;
+	}
+
+	/**
+	 * Brings what a note shows of its page up to date when it is opened, without touching its text: the inline
+	 * comments, when the page has a version the note does not show them at, and mention macros, which become links.
+	 * Usually costs one request: the page, to compare its version. `read` gives the note as it is now, in the editor
+	 * when it is open there; `apply` changes it with a function of its whole text, and gives the new text, or `null`
+	 * when nothing changed. Returns `null` for a note that was never synced or whose page is gone.
+	 */
+	async refreshShown(
+		client: XWikiClient,
+		file: TFile,
+		read: () => Promise<string>,
+		apply: (transform: (text: string) => string) => Promise<string | null>,
+	): Promise<ShownRefresh | null> {
+		const record = this.host.syncState[file.path];
+		if (!record) return null;
+		const location = this.locate(file);
+		const remote = await client.getPage(location);
+		if (!remote) return null;
+		const sameContent = record.remoteHash !== undefined && record.remoteHash === contentHash(remote.content);
+		const result = { changed: false, version: remote.version, pageChanged: record.version !== remote.version && !sameContent };
+		const text = await read();
+		const references = mentionReferences(stripFrontmatter(text));
+		// A new comment gives the page a new version: at the version of the record, the comments shown are current.
+		let readComments = this.host.settings.inlineComments && (!commentsCurrent(record) || record.version !== remote.version);
+		// Resolving or reopening a comment may not: the comments are read again when one of them was resolved or
+		// reopened since the note showed it.
+		if (this.host.settings.inlineComments && !readComments && text.includes("[^xwiki-")) {
+			const resolved = (await this.resolutions(client, location))?.resolved;
+			if (resolved) {
+				const shown = [...text.matchAll(/^\[\^xwiki-(\d+)\]:/gm)].map((match) => Number(match[1]));
+				const shownAsResolved = shownResolved(text);
+				readComments = shown.some((id) => resolved.has(id) !== shownAsResolved.has(id));
+			}
+		}
+		// Mentions written in the vault get the anchors their publish gave them, when the note does not show them yet.
+		const baseUrl = this.host.settings.baseUrl;
+		const unanchored = anchorMentionLinks(stripFrontmatter(text), baseUrl, remote.content) !== stripFrontmatter(text);
+		if (references.length === 0 && !readComments && !unanchored) return result;
+
+		const names = await this.userNames(client, location, references, text);
+		const comments = readComments ? await this.pageComments(client, location, remote, false) : undefined;
+		const wasInSync = !this.isLocallyChanged(file, text);
+		const updated = await apply((whole) => {
+			const body = stripFrontmatter(whole);
+			let next = references.length > 0 ? transformOutsideCode(body, (part) => mentionsToLinks(part, baseUrl, (reference) => names.get(reference))) : body;
+			next = anchorMentionLinks(next, baseUrl, remote.content);
+			if (comments) next = addInlineComments(`${stripInlineComments(next).replace(/\s+$/, "")}\n`, comments);
+			return next.trim() === body.trim() ? whole : this.replaceBody(whole, next);
+		});
+		result.changed = updated !== null;
+		// Mention links are published as the macros they replace: a note in sync stays in sync.
+		if (updated !== null && wasInSync) {
+			record.bodyHash = bodyHash(updated);
+			record.hash = undefined;
+		}
+		if (references.length > 0 || record.version === remote.version) record.format = PULL_FORMAT;
+		if (comments && record.version === remote.version) record.comments = COMMENTS_FORMAT;
+		await this.save();
+		return result;
+	}
+
+	/**
+	 * Shows the current comments of the page in a note whose text stays as it is, such as a note with local edits.
+	 * Returns whether the note was changed.
+	 */
+	private async refreshComments(file: TFile, comments: CommentThread[]): Promise<boolean> {
+		let changed = false;
+		await this.app.vault.process(file, (data) => {
+			const body = stripFrontmatter(data);
+			const next = addInlineComments(`${stripInlineComments(body).replace(/\s+$/, "")}\n`, comments);
+			changed = next.trim() !== body.trim();
+			return changed ? this.replaceBody(data, next) : data;
+		});
+		return changed;
+	}
+
+	/**
+	 * Sends a comment to the page of a note with `send`, then shows the comments of the page in the note. `before` is
+	 * the page as it was before. A note that was at that version is now at the version the comment gave the page:
+	 * one's own comment is not a change of the page to pull, or to be asked about when publishing.
+	 */
+	async postComment(client: XWikiClient, file: TFile, location: PageLocation, before: RemotePage, send: () => Promise<void>, saves = 1): Promise<void> {
+		await send();
+		const after = await client.getPage(location);
+		const record = this.host.syncState[file.path];
+		// Only when the page was saved just by `send`, `saves` times: a save by someone else is still to be pulled.
+		if (record && after && record.version === before.version && isNextVersion(before.version, after.version, saves)) record.version = after.version;
+		const comments = await this.pageComments(client, location, after ?? before, true);
+		if (comments) {
+			await this.refreshComments(file, comments);
+			if (record) record.comments = COMMENTS_FORMAT;
+		}
+		await this.save();
+	}
+
+	/**
+	 * The body that pulling the page would write into its note, `file`, or into a new note: converted like a pull,
+	 * with the names of mentioned users and the inline comments, but nothing is downloaded or written. Attachments
+	 * not downloaded yet are linked by their name.
+	 */
+	async previewPull(client: XWikiClient, location: PageLocation, remote: RemotePage, file: TFile | null): Promise<{ markdown: string; attachments: Set<string> }> {
+		const { source } = await this.remoteMarkdown(client, location, remote);
+		const path = file?.path ?? `${pageDisplayName(location)}.md`;
+		const links = new Map<string, string>();
+		for (const [name, attachment] of this.trackedAttachments(location)) links.set(name, this.app.metadataCache.fileToLinktext(attachment, path, true));
+		const baseUrl = this.host.settings.baseUrl;
+		const names = await this.userNames(client, location, mentionReferences(source), file ? await this.app.vault.read(file) : "");
+		const { markdown, attachments } = convertFromXWiki(source, this.resolver(client, location, path, this.buildIndex(), links), {
+			hardLineBreaks: hardLineBreaks(this.host.settings, this.app),
+			comments: this.host.settings.obsidianComments,
+			mentions: { baseUrl, names },
+		});
+		const comments = await this.pageComments(client, location, remote, false);
+		return { markdown: comments ? addInlineComments(markdown, comments) : markdown, attachments };
+	}
+
+	/**
+	 * Downloads attachments of the page that the note now links to but the vault does not have yet, such as the
+	 * images of a block pulled on its own. Returns the ones that failed.
+	 */
+	async fetchAttachments(client: XWikiClient, location: PageLocation, file: TFile, names: string[]): Promise<string[]> {
+		const tracked = this.trackedAttachments(location);
+		const missing = names.filter((name) => !tracked.has(name));
+		if (missing.length === 0) return [];
+		const { failed } = await this.downloadAttachments(client, location, new Set(missing), file.path, new Map());
+		await this.save();
+		return failed;
+	}
+
 	/** Pulls one page into the vault, protecting local edits made since the last sync. */
 	async pull(client: XWikiClient, location: PageLocation, options: PullOptions): Promise<PullResult> {
 		const remote = options.remote !== undefined ? options.remote : await client.getPage(location);
@@ -824,10 +1181,23 @@ export class SyncService {
 		const record = existing ? this.host.syncState[existing.path] : undefined;
 		// Attachments that failed last time are tried again, even when the page did not change.
 		const retry = record?.missingAttachments ?? [];
-		if (existing && record?.version === remote.version && retry.length === 0) {
+		if (existing && record?.version === remote.version && retry.length === 0 && !options.force) {
+			// The page did not change, and the text of the note, in sync or edited, stays as it is. Only what a pull
+			// shows differently now is brought up to date: the mentions of a note written by an earlier version, and
+			// the comments of a note whose record does not have them (synced before comments were pulled, or published
+			// since; a new comment gives the page a new version).
+			let refreshed = pulledDifferently(record, remote) && (await this.refreshMentions(client, location, existing, record));
+			if (!commentsCurrent(record)) {
+				const comments = await this.pageComments(client, location, remote, options.interactive);
+				if (comments) {
+					refreshed = (await this.refreshComments(existing, comments)) || refreshed;
+					record.comments = COMMENTS_FORMAT;
+					await this.save();
+				}
+			}
 			await this.followLocation(existing, client, location, remote, options);
 			await this.relocateAttachments(client, location, existing);
-			return { outcome: "unchanged", converted: false };
+			return { outcome: refreshed ? "updated" : "unchanged", converted: false };
 		}
 
 		const { source, converted } = await this.remoteMarkdown(client, location, remote);
@@ -840,45 +1210,70 @@ export class SyncService {
 		// Attachments already in the vault are linked right away; new ones once they are downloaded.
 		const links = new Map<string, string>();
 		for (const [name, file] of this.trackedAttachments(location)) links.set(name, this.app.metadataCache.fileToLinktext(file, path, true));
+		const baseUrl = this.host.settings.baseUrl;
+		const names = await this.userNames(client, location, mentionReferences(source), existing ? await this.app.vault.read(existing) : "");
 		const convert = () =>
 			convertFromXWiki(source, this.resolver(client, location, path, options.index, links), {
 				hardLineBreaks: hardLineBreaks(this.host.settings, this.app),
 				comments: this.host.settings.obsidianComments,
+				mentions: { baseUrl, names },
 			});
 		const first = convert();
+		// `undefined`: comments are not pulled, or could not be read; the marks in the note are then left as they are.
+		const threads = await this.pageComments(client, location, remote, options.interactive);
+		const withComments = (markdown: string) => (threads ? addInlineComments(markdown, threads) : markdown);
 
 		if (existing) {
 			const local = await vault.read(existing);
-			if (stripFrontmatter(local).trim() === first.markdown.trim() && retry.length === 0) {
+			const localBody = stripFrontmatter(local);
+			if (stripInlineComments(localBody).trim() === first.markdown.trim() && retry.length === 0) {
+				// The text is the same: only the comments shown in the note may be out of date.
+				const body = withComments(first.markdown);
+				const refresh = threads !== undefined && body.trim() !== localBody.trim();
+				if (refresh) await vault.process(existing, (data) => this.replaceBody(data, body));
 				await this.followLocation(existing, client, location, remote, options);
 				await this.writeMetadata(existing, client, location, remote, false);
 				await this.relocateAttachments(client, location, existing);
-				await this.recordSync(existing, remote.version, location);
-				return result("unchanged");
+				await this.recordSync(existing, remote.version, location, { comments: threads !== undefined, content: remote.content, pulled: true });
+				return result(refresh ? "updated" : "unchanged");
 			}
 			// Decide about conflicts before downloading anything, so the local note's files are never touched first.
-			if (this.isLocallyChanged(existing, local)) {
-				if (record?.version === remote.version) {
-					// Only attachments are missing and the page did not change: fetch them, and leave the edited note alone.
-					const { retry: still } = await this.downloadAttachments(client, location, new Set(retry), existing.path, new Map());
+			if (this.isLocallyChanged(existing, local) && !options.force) {
+				// A comment or an attachment gives the page a new version too: while its text is what it was at the last
+				// sync, the edits of the note do not conflict with anything.
+				// Records of earlier versions do not have the content of the page: the note as it was then stands for it.
+				const sameContent =
+					record?.remoteHash !== undefined ? record.remoteHash === contentHash(remote.content) : record?.bodyHash !== undefined && matchesBody(record.bodyHash, first.markdown);
+				const sameText = record?.version === remote.version || sameContent;
+				if (record && sameText) {
+					// Fetch the attachments that are missing or were replaced, and leave the text of the edited note alone.
+					const pageChanged = record.version !== remote.version;
+					const names = pageChanged ? [...new Set([...retry, ...first.attachments])] : retry;
+					const { retry: still } = await this.downloadAttachments(client, location, new Set(names), existing.path, new Map());
+					const refreshed = threads !== undefined && (await this.refreshComments(existing, threads));
 					record.missingAttachments = still.length > 0 ? still : undefined;
+					record.version = remote.version;
+					record.remoteHash = contentHash(remote.content);
+					if (threads !== undefined) record.comments = COMMENTS_FORMAT;
 					await this.save();
 					await this.followLocation(existing, client, location, remote, options);
+					// The title may be what changed on the page.
+					if (pageChanged) await this.writeMetadata(existing, client, location, remote, false);
 					await this.relocateAttachments(client, location, existing);
-					return result("unchanged");
+					return result(refreshed ? "updated" : "unchanged");
 				}
 				const action = options.interactive
 					? await choose(this.app, "Note changed locally", `"${existing.basename}" has local changes that are not on XWiki, and the XWiki page changed too.`, [
 							{ label: "Keep both", value: "copy" as const, cta: true },
 							{ label: "Overwrite local note", value: "overwrite" as const, warning: true },
 						])
-					: "copy";
+					: (options.conflict ?? "copy");
 				if (action === null) return result("cancelled");
 				if (action === "copy") {
 					const copyPath = existing.path.replace(/\.md$/, " (XWiki conflict).md");
 					const copy = vault.getFileByPath(copyPath);
-					if (copy) await vault.modify(copy, first.markdown);
-					else await vault.create(copyPath, first.markdown);
+					if (copy) await vault.modify(copy, withComments(first.markdown));
+					else await vault.create(copyPath, withComments(first.markdown));
 					return result("conflict");
 				}
 			}
@@ -886,7 +1281,7 @@ export class SyncService {
 
 		const { failed, retry: missing } = await this.downloadAttachments(client, location, first.attachments, path, links);
 		if (failed.length > 0) new Notice(`Could not download from "${pageDisplayName(location)}": ${failed.join(", ")}`);
-		const { markdown } = convert();
+		const markdown = withComments(convert().markdown);
 
 		let file: TFile;
 		if (existing) {
@@ -902,7 +1297,7 @@ export class SyncService {
 			await this.writeMetadata(file, client, location, remote, true);
 		}
 		await this.relocateAttachments(client, location, file);
-		await this.recordSync(file, remote.version, location, !existing, missing);
+		await this.recordSync(file, remote.version, location, { placed: !existing, missing, comments: threads !== undefined, content: remote.content, pulled: true });
 		return result(existing ? "updated" : "created");
 	}
 
@@ -1019,6 +1414,21 @@ export class SyncService {
 	/** A note back at the path of a deleted note, such as one restored from the trash, is that note again. */
 	onCreate(file: TAbstractFile): void {
 		if (file instanceof TFile && this.restoreDeleted(file.path)) void this.save();
+	}
+
+	/**
+	 * Creates the note of a deleted note again, empty and linked to its page, at the path it had, with the record it
+	 * had; a pull with `force` then writes the page into it.
+	 */
+	async recreateNote(note: DeletedNote): Promise<TFile> {
+		await this.ensureFolder(note.path);
+		const file = await this.app.vault.create(note.path, "");
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+			fm[FM_REFERENCE] = note.reference;
+		});
+		// The create event does this too, but maybe later.
+		if (this.restoreDeleted(note.path)) await this.save();
+		return file;
 	}
 
 	private restoreDeleted(path: string): boolean {
