@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.10.0
+
+- **Work packages as issue macros**: XWiki's issue macro (`{{issue key="PROJ-42"/}}`) is shown in the note as a link that opens the work package in OpenProject (`[PROJ-42](…/wp/PROJ-42)`), also in notes pulled before, and is published as the macro it was. Other links to work packages stay links. Publishing links the page to the work packages of its issue macros in OpenProject, like the links to them.
+- **Adding work packages**: *Add OpenProject work package* in the editor menu, or the command *Insert OpenProject work package*, searches OpenProject by subject or id and writes the link at the cursor. With the new setting *Work package key prefixes* (`PROJ-`), typing a prefix and a digit in a note (`PROJ-12`) lists the work packages whose key starts so; `#tags` are left alone.
+- **Work packages in comments**: in the comment, reply and edit boxes, `#` and a subject or an id, or a key prefix and a digit, lists the work packages; the chosen one is sent as an issue macro, and pulled comments show it as a link. Work packages of comments never link the page in OpenProject.
+- **Editing comments**: every comment and reply in the comment popover has an **Edit** button. The box shows its text as XWiki has it, mentions as `@Name` and work packages as `#PROJ-42`, and saving sends it right away; its author, date and commented text stay, and its mentions keep their anchors, so nobody is notified again.
+- **Mentions broken by XWiki's editor**: saving a Markdown page in XWiki's WYSIWYG editor doubles the backslash in mentions of users whose login has a dot, and XWiki then shows another user. Such mentions are pulled as links to the user meant, the note is listed under *Changes* with an explanation in its comparison, and publishing it repairs the page, also from *Publish* in the *Source control* tab.
+- **Pages saved by XWiki's editor**: tables that lost their empty header row get it back, links and formatting the editor wrote as HTML in table cells come back as Markdown and wiki links, and padded `&nbsp;` cells are empty again. Notes pulled before from such pages are listed once by **Check XWiki** and converted again by the pull, unless they were edited.
+- **Embedded files**: an embedded file that is not an image (`![[plan.docx]]`) is published as a link marked as an embed, and comes back as an embed. A link to an attachment no longer comes back with its reference as alias (`[[plan.docx|attach:plan.docx]]`), so it is not shown as a difference.
+- **Links to pages with parentheses**: references to pages whose names have parentheses (`Buttons (SB)`) come back as wiki links. Before, the link was cut at the first `)` and pointed to a page that does not exist.
+- **Check XWiki progress**: the progress of a check, and of a pull of incoming notes, is shown above the incoming list, next to its buttons, instead of at the top of the tab.
+
 ## 1.9.0
 
 - **Inline comments**: comments made on a text selection of an XWiki page are shown in the pulled note. The commented text is highlighted (`==💬text==`) and followed by a footnote with the comment, its replies, their authors and dates; comments whose text is no longer in the note are listed after it. The marks are removed when the note is published, so the page content and the comments on XWiki stay as they are, and they do not count as an edit of the note. Notes synced before get their comments at the next pull. New setting *Inline comments* to turn this off.
