@@ -41,8 +41,18 @@ const MACRO = /\{\{mention((?:\s+[A-Za-z]+="[^"\n]*")+)\/\}\}/g;
 /** A link whose text starts with `@`; whether it is a mention depends on its address. */
 const LINK = /\[@((?:\\.|[^\]\\\n])*)\]\((?:<([^>\n]+)>|([^)\s]+))\)/g;
 
-function macroOf(mention: Mention, anchor: string): string {
-	return `{{mention reference="${mention.reference}" style="${mention.style}" anchor="${anchor}"/}}`;
+function macroOf(mention: Mention, anchor: string, escaped = false): string {
+	const value = (text: string) => (escaped ? text.replace(/\\/g, "\\\\") : text);
+	return `{{mention reference="${value(mention.reference)}" style="${value(mention.style)}" anchor="${value(anchor)}"/}}`;
+}
+
+/**
+ * Value of a macro parameter, where a backslash may have been doubled (`XWiki.jane\\.doe`). XWiki does not read such
+ * a reference as the user (it shows `@doe`), but that user is what was meant: the mention comes back as a link to
+ * them, and publishing writes the macro that works (`XWiki.jane\.doe`), which repairs the page.
+ */
+function parameterValue(written: string): string {
+	return written.replace(/\\\\/g, "\\");
 }
 
 /**
@@ -51,13 +61,13 @@ function macroOf(mention: Mention, anchor: string): string {
  */
 function parseMacro(macro: string, parameters: string): (Mention & { anchor: string }) | null {
 	const values = new Map<string, string>();
-	for (const match of parameters.matchAll(/([A-Za-z]+)="([^"\n]*)"/g)) values.set(match[1], match[2]);
+	for (const match of parameters.matchAll(/([A-Za-z]+)="([^"\n]*)"/g)) values.set(match[1], parameterValue(match[2]));
 	const reference = values.get("reference");
 	const style = values.get("style");
 	const anchor = values.get("anchor");
 	if (!reference || !style || !anchor || mentionLogin(reference) === null) return null;
 	const mention = { reference, style, anchor };
-	return macroOf(mention, anchor) === macro ? mention : null;
+	return macroOf(mention, anchor) === macro || macroOf(mention, anchor, true) === macro ? mention : null;
 }
 
 /**
@@ -134,7 +144,7 @@ function mentionLinks(text: string, baseUrl: string): { index: number; length: n
 
 /**
  * Writes the mention links of a note as mention macros, for publishing. A link pulled from XWiki becomes the macro
- * it was. A link without an anchor gets one that no other mention of the note has.
+ * it was (with a doubled backslash undone). A link without an anchor gets one that no other mention of the note has.
  */
 export function linksToMentions(text: string, baseUrl: string): string {
 	const links = mentionLinks(text, baseUrl);
@@ -223,8 +233,58 @@ export function mentionsToLinks(
 		if (!mention || login === null) return macro;
 		const shown = mention.style === "LOGIN" ? login : name(mention.reference)?.trim() || login;
 		const link = mentionLink(baseUrl, mention, shown);
-		return link !== null && linksToMentions(link, baseUrl) === macro ? keep(link) : macro;
+		if (link === null) return macro;
+		// A macro with a doubled backslash comes back as the link to the user that was meant.
+		const written = linksToMentions(link, baseUrl);
+		return written === macro || written === macroOf(mention, mention.anchor) ? keep(link) : macro;
 	});
+}
+
+/**
+ * Number of mention macros of a page source whose backslashes were doubled (`XWiki.jane\\.doe`), as XWiki's WYSIWYG
+ * editor saves them in a Markdown page: XWiki then shows another user. Publishing the note writes them right again.
+ */
+export function brokenMentions(source: string): number {
+	let count = 0;
+	for (const match of source.matchAll(MACRO)) {
+		const mention = parseMacro(match[0], match[1]);
+		if (mention && match[0] !== macroOf(mention, mention.anchor)) count++;
+	}
+	return count;
+}
+
+/**
+ * The source of a comment for editing: its mention macros shown as `@Name`, with the macro each stands for, so that
+ * sending the text writes them back as they were (with their anchors: nobody is notified again). Macros that are
+ * not mentions of users of this wiki, or whose name is shown by another mention too, stay as they are.
+ */
+export function mentionsForEditing(source: string, name: (reference: string) => string | undefined): { text: string; mentions: { shown: string; macro: string }[] } {
+	const mentions: { shown: string; macro: string }[] = [];
+	const text = source.replace(MACRO, (macro: string, parameters: string) => {
+		const mention = parseMacro(macro, parameters);
+		const login = mention ? mentionLogin(mention.reference) : null;
+		if (!mention || login === null) return macro;
+		const shown = `@${(mention.style === "LOGIN" ? login : name(mention.reference)?.trim()) || login}`;
+		const same = mentions.find((existing) => existing.shown === shown);
+		if (same && same.macro !== macro) return macro;
+		if (!same) mentions.push({ shown, macro });
+		return shown;
+	});
+	return { text, mentions };
+}
+
+/**
+ * The text of a comment as it is sent: each name chosen while typing (`@Jane Doe`, `#PROJ-42`) written as the macro
+ * it stands for. The longest names first, and only whole names: `@Ali` is not taken for the start of `@Ali Veli`, nor
+ * `#PROJ-4` for that of `#PROJ-42`.
+ */
+export function sendable(typed: string, chosen: { shown: string; macro: string }[]): string {
+	let text = typed.trim();
+	for (const { shown, macro } of [...chosen].sort((a, b) => b.shown.length - a.shown.length)) {
+		const pattern = new RegExp(`${shown.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}_-])`, "gu");
+		text = text.replace(pattern, () => macro);
+	}
+	return text;
 }
 
 /** Users mentioned in the source of a page, by the macros that become links: the ones whose names are looked up. */

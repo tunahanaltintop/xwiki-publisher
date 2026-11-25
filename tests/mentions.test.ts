@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { convertNote } from "../src/converter.ts";
 import { convertFromXWiki } from "../src/reverse.ts";
-import { anchorMentionLinks, linksToMentions, mentionLink, mentionNames, mentionReferences, mentionsToLinks, newMentionMacro, parseMentionUrl, parseUsers } from "../src/mentions.ts";
+import { anchorMentionLinks, brokenMentions, linksToMentions, mentionsForEditing, mentionLink, mentionNames, mentionReferences, mentionsToLinks, newMentionMacro, parseMentionUrl, parseUsers } from "../src/mentions.ts";
 
 const BASE = "https://wiki.example.com/";
 const PROFILE = "https://wiki.example.com/bin/view/XWiki";
@@ -159,4 +159,38 @@ test("the anchors a publish gave are written into the note, so they stay when me
 	// Mentions in code and in the footnotes of inline comments are not published, and get nothing.
 	const elsewhere = `\`[@Jane](${PROFILE}/jane.doe)\`\n\n[^xwiki-0]: 💬 **A**: [@Jane](${PROFILE}/jane.doe)\n`;
 	assert.equal(anchorMentionLinks(elsewhere, BASE, page), elsewhere);
+});
+
+test("mentions with a doubled backslash come back as links to the user meant, and are published as the macro that works", () => {
+	// XWiki reads `XWiki.jane\\.doe` as another user (it shows `@doe`); `XWiki.jane\.doe` is Jane Doe.
+	const doubled = PAGE.replace(/\\\./g, "\\\\.");
+	assert.notEqual(doubled, PAGE);
+	const pulled = convertFromXWiki(doubled, () => null, { mentions: { baseUrl: BASE, names: NAMES } }).markdown;
+	assert.equal(pulled, NOTE);
+	assert.deepEqual(mentionReferences(doubled), ["XWiki.jane\\.doe", "XWiki.asmith", "XWiki.john\\.roe"]);
+	assert.equal(convertNote(pulled, () => null, { mentions: { baseUrl: BASE } }).markdown, PAGE);
+});
+
+test("mentions broken by a doubled backslash are counted, so their page can be repaired", () => {
+	assert.equal(brokenMentions(PAGE), 0);
+	assert.equal(brokenMentions(PAGE.replace(/\\\./g, "\\\\.")), 3);
+	assert.equal(brokenMentions('{{mention reference="XWiki.asmith" style="FULL_NAME" anchor="a"/}}'), 0);
+});
+
+test("comments are edited with their mentions shown as names, and sent back with the same macros", () => {
+	const jane = '{{mention reference="XWiki.jane\\.doe" style="FULL_NAME" anchor="XWiki-jane-doe-a1"/}}';
+	const doubled = '{{mention reference="XWiki.jane\\\\.doe" style="FULL_NAME" anchor="XWiki-jane-doe-a2"/}}';
+	const login = '{{mention reference="XWiki.asmith" style="LOGIN" anchor="XWiki-asmith-b1"/}}';
+	const other = '{{mention reference="xwiki:XWiki.Admin" style="FULL_NAME" anchor="c"/}}';
+	const source = `${jane} bakar mısın? ${login} ve ${other}, ayrıca ${doubled}`;
+	const { text, mentions } = mentionsForEditing(source, name);
+	// The second mention of Jane has another macro: it stays as it is, so each name stands for one macro.
+	assert.equal(text, `@Jane Doe bakar mısın? @asmith ve ${other}, ayrıca ${doubled}`);
+	assert.deepEqual(mentions, [
+		{ shown: "@Jane Doe", macro: jane },
+		{ shown: "@asmith", macro: login },
+	]);
+	let sent = text;
+	for (const mention of mentions) sent = sent.split(mention.shown).join(mention.macro);
+	assert.equal(sent, source);
 });

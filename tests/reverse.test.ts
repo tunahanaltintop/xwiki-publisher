@@ -92,3 +92,74 @@ test("keeps images that link somewhere else", () => {
 	const { markdown } = convertFromXWiki("[![badge](https://w/b.png)](https://ci.example.com/build)", () => null);
 	assert.equal(markdown, "[![badge](https://w/b.png)](https://ci.example.com/build)\n");
 });
+
+test("attachment links come back without the reference as alias, and marked embeds as embeds", () => {
+	const resolveAttach: ReverseResolver = (target) => {
+		if (target === `${XWIKI_LINK}${encodeURIComponent("attach:Roadmap v1.7.docx")}`) return { kind: "attachment", name: "Roadmap v1.7.docx" };
+		if (target === `${XWIKI_LINK}${encodeURIComponent("attach:Other.Page@plan.pdf")}`) return { kind: "url", url: "https://w/bin/download/Other/Page/plan.pdf" };
+		return null;
+	};
+	const { markdown, attachments } = convertFromXWiki(
+		'[[attach:Roadmap v1.7.docx]] [[Roadmap v1.7.docx|attach:Roadmap v1.7.docx|class="obsidian-embed"]] [[Plan|attach:Roadmap v1.7.docx|class="obsidian-embed"]] [[attach:Other.Page@plan.pdf|class="obsidian-embed"]]',
+		resolveAttach,
+	);
+	assert.equal(markdown, "[[Roadmap v1.7.docx]] ![[Roadmap v1.7.docx]] ![[Roadmap v1.7.docx|Plan]] [plan.pdf](https://w/bin/download/Other/Page/plan.pdf)\n");
+	assert.deepEqual([...attachments], ["Roadmap v1.7.docx"]);
+});
+
+test("pages saved by XWiki's WYSIWYG editor: padded empty cells and HTML links in cells", () => {
+	const url = "https://w/bin/view/Docs/Standart%20Butonlar%20(SB)/UC_STD_SB_002%20Breadcrumb/";
+	const resolveView: ReverseResolver = (target) =>
+		target === url ? { kind: "note", linktext: "05. UC_STD_SB_002 Breadcrumb", basename: "05. UC_STD_SB_002 Breadcrumb" } : null;
+	const page = [
+		"|          Alan          |   Açıklama   |   Tür   |",
+		"|------------------------|--------------|---------|",
+		`|   **5. Breadcrumb**    | Bkz.<br>(bkz. <a href="${url.replace(/_/g, "\\_")}">UC\\_STD\\_SB\\_002 Breadcrumb</a>). |  Rota   |`,
+		"| **6. Parola** |  &nbsp;  |&nbsp;|",
+		"",
+		'Dış bağlantı: <a href="https://example.com/a?b=1&amp;c=2">Örnek</a>',
+		"",
+	].join("\n");
+	const { markdown } = convertFromXWiki(page, resolveView);
+	const lines = markdown.split("\n");
+	assert.equal(lines[2], "|   **5. Breadcrumb**    | Bkz.<br>(bkz. [[05. UC_STD_SB_002 Breadcrumb\\|UC_STD_SB_002 Breadcrumb]]). |  Rota   |");
+	assert.equal(lines[3], "| **6. Parola** |  |  |");
+	assert.equal(lines[5], "Dış bağlantı: [Örnek](https://example.com/a?b=1&c=2)");
+});
+
+test("tables whose empty header row XWiki's editor left out get it back", () => {
+	const page = [
+		"| ----------- | ------------ |",
+		"|  Senaryo No | UC_001 |",
+		"",
+		"| No | Soru |",
+		"| --- | --- |",
+		"| 1 | Ne? |",
+		"",
+		"Metin",
+		"| --- | --- | :---: |",
+		"| a | b | c |",
+		"",
+	].join("\n");
+	assert.equal(
+		convertFromXWiki(page, resolve).markdown,
+		["|  |  |", "| ----------- | ------------ |", "|  Senaryo No | UC_001 |", "", "| No | Soru |", "| --- | --- |", "| 1 | Ne? |", "", "Metin", "|  |  |  |", "| --- | --- | :---: |", "| a | b | c |", ""].join("\n"),
+	);
+});
+
+test("cells that XWiki's editor wrote as HTML come back as Markdown", () => {
+	const page = '| Mesaj | **Bilgi:** "Tamam"<br><strong>Uyarı:</strong> &quot;Dikkat&quot; <em>not</em> |\n\nDışarıda &quot;aynen&quot;\n';
+	assert.equal(convertFromXWiki(page, resolve).markdown, '| Mesaj | **Bilgi:** "Tamam"<br>**Uyarı:** "Dikkat" *not* |\n\nDışarıda &quot;aynen&quot;\n');
+});
+
+test("references to pages whose names have parentheses come back as wiki links", () => {
+	const reference = "Docs.Standart Butonlar (SB), Bileşen (SBL).UC_SB_002 Breadcrumb.WebHome";
+	// The real resolver decodes the reference and reads its `doc:` type.
+	const resolveParens: ReverseResolver = (target) =>
+		decodeURIComponent(target) === `${XWIKI_LINK}doc:${reference}` ? { kind: "note", linktext: "05. UC_SB_002 Breadcrumb", basename: "05. UC_SB_002 Breadcrumb" } : null;
+	const page = `| A | (bkz. [[UC_SB_002 Breadcrumb\\|doc:${reference}]]). |\n\nMetin [[Bak|doc:${reference}|anchor="H(1)"]]\n`;
+	assert.equal(
+		convertFromXWiki(page, resolveParens).markdown,
+		"| A | (bkz. [[05. UC_SB_002 Breadcrumb\\|UC_SB_002 Breadcrumb]]). |\n\nMetin [[05. UC_SB_002 Breadcrumb|Bak]]\n",
+	);
+});

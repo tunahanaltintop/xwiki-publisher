@@ -65,7 +65,7 @@ function incomingTooltip(change: IncomingChange): string {
 		case "comments":
 			return `New comments or attachments on XWiki (${versions}); the text of the page is the same`;
 		case "format":
-			return "Pulling shows its mentions as links; the page did not change";
+			return "Pulling shows its mentions and work packages as links; the page did not change";
 		case "attachments":
 			return "Attachments that could not be downloaded at the last pull";
 	}
@@ -272,14 +272,9 @@ export class XWikiPanelView extends ItemView {
 		el.addClass("xwiki-panel");
 
 		this.renderTabs(el);
-		if (this.plugin.busy) {
-			const busy = el.createDiv({ cls: "xwiki-panel-busy" });
-			busy.createSpan({ text: this.plugin.busy });
-			if (this.plugin.cancellable) {
-				const cancel = busy.createEl("button", { text: "Cancel", cls: "xwiki-panel-cancel" });
-				cancel.addEventListener("click", () => this.plugin.cancel());
-			}
-		}
+		// The progress of a check or pull of incoming notes is shown above their list, next to the buttons that started
+		// it: at the top of the tab it would be out of sight below a long list of local changes.
+		if (!(this.tab === "changes" && this.plugin.busySection === "incoming")) this.renderBusy(el);
 
 		if (this.tab === "changes") {
 			this.renderChanges(el);
@@ -293,6 +288,17 @@ export class XWikiPanelView extends ItemView {
 			this.renderActivity(el);
 		}
 		el.scrollTop = scroll;
+	}
+
+	/** The operation in progress, with its Cancel button. */
+	private renderBusy(el: HTMLElement): void {
+		if (!this.plugin.busy) return;
+		const busy = el.createDiv({ cls: "xwiki-panel-busy" });
+		busy.createSpan({ text: this.plugin.busy });
+		if (this.plugin.cancellable) {
+			const cancel = busy.createEl("button", { text: "Cancel", cls: "xwiki-panel-cancel" });
+			cancel.addEventListener("click", () => this.plugin.cancel());
+		}
 	}
 
 	private renderTabs(el: HTMLElement): void {
@@ -388,7 +394,9 @@ export class XWikiPanelView extends ItemView {
 		for (const path of [...this.selectedIncoming]) if (!listed.has(path)) this.selectedIncoming.delete(path);
 		const selected = pullable.filter((change) => this.selectedIncoming.has(change.path));
 
-		const toolbar = el.createDiv({ cls: "xwiki-changes-toolbar xwiki-incoming-toolbar" });
+		const head = el.createDiv({ cls: "xwiki-incoming-head" });
+		if (this.plugin.busySection === "incoming") this.renderBusy(head);
+		const toolbar = head.createDiv({ cls: "xwiki-changes-toolbar" });
 		const all = toolbar.createEl("label", { cls: "xwiki-changes-select-all" });
 		this.selectionBox(section, all, pullable.map((change) => change.path), "Select all notes to pull");
 		all.createSpan({ text: "Select all" });

@@ -13,7 +13,7 @@ import {
 	parseSpaceInput,
 	serializeReference,
 } from "./location";
-import { choose, chooseFolder, prompt, promptText } from "./modals";
+import { choose, chooseFolder, MentionInput, prompt, promptText } from "./modals";
 import { DeletedNote, deletionBlocker, deletionOrder, noteBasename } from "./deletions";
 import { FolderNotes } from "./folder-notes";
 import { commentReferences, tidyCommentReferences } from "./comment-display";
@@ -22,12 +22,14 @@ import { DiffHunk, lines, replaceLines, sameText } from "./diff";
 import { DiffBlockAction, DiffModal, DiffSide } from "./diff-modal";
 import { htmlToText } from "./html";
 import { commentAt, commentsBelow, CommentThread, selectionOnPage } from "./inline-comments";
+import { issueLink, issueMacro, issuesForEditing, keyPrefixes, WorkPackage } from "./issues";
+import { WorkPackageModal, WorkPackageSuggest, WorkPackageSuggestHost } from "./issue-modal";
 import { MentionHost, MentionModal, MentionSuggest } from "./mention-suggest";
-import { anchorMentionLinks, mentionLink, MentionUser, newMentionMacro } from "./mentions";
+import { anchorMentionLinks, mentionLink, mentionReferences, mentionsForEditing, MentionUser, newMentionMacro } from "./mentions";
 import { describeLinks, failedReport, LinkReport, syncPageLinks, workPackagesIn } from "./openproject";
 import { OpenProjectClient } from "./openproject-client";
 import { DEFAULT_SETTINGS, hardLineBreaks, XWikiPublisherSettings, XWikiPublisherSettingTab } from "./settings";
-import { AttachmentPaths, AttachmentVersions, IncomingState, PullOutcome, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
+import { AttachmentPaths, AttachmentVersions, IncomingState, pageBrokenMentions, PullOutcome, PullResult, SyncService, SyncState, UploadedAttachments } from "./sync";
 import { VIEW_TYPE_XWIKI, XWikiPanelView } from "./view";
 import { RemotePage, XWikiClient } from "./xwiki-client";
 
@@ -129,7 +131,7 @@ function isConflictCopy(file: TFile): boolean {
 	return file.basename.endsWith(" (XWiki conflict)");
 }
 
-export default class XWikiPublisherPlugin extends Plugin implements MentionHost, CommentPopoverHost {
+export default class XWikiPublisherPlugin extends Plugin implements MentionHost, CommentPopoverHost, WorkPackageSuggestHost {
 	settings: XWikiPublisherSettings = { ...DEFAULT_SETTINGS };
 	syncState: SyncState = {};
 	deletedNotes: SyncState = {};
@@ -144,6 +146,8 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 	busy: string | null = null;
 	/** Whether the running operation can be stopped from the panel (space sync, folder publish). */
 	cancellable = false;
+	/** Part of the source control tab the running operation belongs to, where the panel shows its progress. */
+	busySection: "incoming" | null = null;
 	private cancelRequested = false;
 	/** Notes behind their pages, from the last check against XWiki; `null` until the first check. */
 	incoming: IncomingCheck | null = null;
@@ -265,6 +269,17 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 			},
 		});
 		this.registerEditorSuggest(new MentionSuggest(this));
+		this.registerEditorSuggest(new WorkPackageSuggest(this));
+
+		this.addCommand({
+			id: "insert-work-package",
+			name: "Insert OpenProject work package",
+			editorCheckCallback: (checking, editor) => {
+				if (!this.settings.openProjectUrl) return false;
+				if (!checking) this.insertWorkPackage(editor);
+				return true;
+			},
+		});
 
 		// The references of inline comments are hidden where notes are shown; the 💬 icon stands for them.
 		this.registerEditorExtension(commentReferences);
@@ -305,6 +320,15 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu, editor, info) => {
 				const file = info.file;
+				// Work packages are published as issue macros, and link the page in OpenProject.
+				if (file && this.settings.openProjectUrl) {
+					menu.addItem((item) =>
+						item
+							.setTitle("Add OpenProject work package")
+							.setIcon("square-check-big")
+							.onClick(() => this.insertWorkPackage(editor)),
+					);
+				}
 				if (!file || !this.syncState[file.path]) return;
 				menu.addItem((item) =>
 					item
@@ -428,18 +452,20 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 	}
 
 	/** Runs one XWiki operation at a time, so the panel can show progress and disable its buttons. */
-	private async exclusive(label: string, task: () => Promise<void>): Promise<void> {
+	private async exclusive(label: string, task: () => Promise<void>, section: "incoming" | null = null): Promise<void> {
 		if (this.busy) {
 			new Notice(`XWiki Publisher is busy: ${this.busy}`);
 			return;
 		}
 		this.busy = label;
+		this.busySection = section;
 		this.cancelRequested = false;
 		this.changed();
 		try {
 			await task();
 		} finally {
 			this.busy = null;
+			this.busySection = null;
 			this.cancellable = false;
 			this.changed();
 		}
@@ -471,7 +497,8 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 	async localStatus(file: TFile): Promise<{ synced: boolean; version?: string; localChanges: boolean }> {
 		const record = this.syncState[file.path];
 		if (!record) return { synced: false, localChanges: false };
-		return { synced: true, version: record.version, localChanges: this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file)) };
+		const changed = this.sync.hasBrokenMentions(file) || this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file));
+		return { synced: true, version: record.version, localChanges: changed };
 	}
 
 	/**
@@ -484,7 +511,10 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		const notes = this.publishableNotes();
 		for (const file of notes) {
 			if (!this.syncState[file.path]) changes.push({ path: file.path, file, status: "added" });
-			else if (this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file))) changes.push({ path: file.path, file, status: "modified" });
+			// A page whose mentions XWiki's editor broke is repaired by publishing its note.
+			else if (this.sync.hasBrokenMentions(file) || this.sync.isLocallyChanged(file, await this.app.vault.cachedRead(file))) {
+				changes.push({ path: file.path, file, status: "modified" });
+			}
 		}
 		for (const note of this.sync.pendingDeletions(notes)) changes.push({ path: note.path, file: null, status: "deleted", note });
 		return changes.sort((a, b) => a.path.localeCompare(b.path));
@@ -824,6 +854,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 			comments: this.settings.obsidianComments,
 			xwikiReferences: true,
 			mentions: { baseUrl: this.settings.baseUrl },
+			openProjectUrl: this.settings.openProjectUrl,
 		});
 
 		const remote = await client.getPage(location);
@@ -831,7 +862,9 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 			if (!remote || remote.version !== options.expectedVersion) throw new Error("The page changed on XWiki since the comparison was opened. It was compared again: check the change and try once more.");
 			if (!/^markdown\//i.test(remote.syntax)) throw new Error(`The page is written in ${remote.syntax}. Publish the whole note to turn it into Markdown first.`);
 		}
-		if (options.skipUnchanged && remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content)) {
+		// A page whose mentions XWiki's editor broke is published although the note did not change: that repairs them.
+		const unchanged = remote && remote.version === this.sync.lastSyncedVersion(file) && !this.sync.isLocallyChanged(file, content) && !this.sync.hasBrokenMentions(file);
+		if (options.skipUnchanged && remote && unchanged) {
 			options.knownPages?.add(serializeReference(location));
 			// The page stays as it is, but its work packages may not be linked yet: OpenProject may have been set up since.
 			return { outcome: "unchanged", uploaded: 0, failed: [], links: await this.syncWorkPackageLinks(client, location, remote.content, markdown, options.status) };
@@ -888,7 +921,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		// Attachment uploads create page versions too, so read the version once everything is saved.
 		const saved = await client.getPage(location);
 		if (options.record !== false) {
-			if (saved) await this.sync.recordSync(file, saved.version, location, { content: saved.content, body: published });
+			if (saved) await this.sync.recordSync(file, saved.version, location, { content: saved.content, syntax: saved.syntax, body: published });
 			// The page is now what the note is: nothing to pull for it anymore.
 			this.settleIncoming(file);
 		}
@@ -1200,6 +1233,60 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		}
 	}
 
+	/** Changes the text of an inline comment of a note, or of a reply, on XWiki. */
+	edit(path: string, comment: number): (() => void) | null {
+		const file = this.app.vault.getFileByPath(path);
+		return file && this.syncState[path] ? () => void this.editComment(file, comment) : null;
+	}
+
+	/**
+	 * Asks for the new text of a comment of the page of a note, starting from its text on XWiki, and sends it right
+	 * away; the note then shows the comments of the page again. Mentions show as `@Name` and are sent back as they were.
+	 */
+	async editComment(file: TFile, comment: number): Promise<void> {
+		const client = this.clientOrNotice();
+		if (!client) return;
+		const location = this.sync.locate(file);
+		let source: string;
+		let initial: { text: string; mentions: { shown: string; macro: string }[] };
+		try {
+			const existing = (await client.listComments(location)).find((candidate) => candidate.id === comment);
+			if (!existing) {
+				this.report("That comment is no longer on XWiki. Pull the note to update its comments.", true);
+				return;
+			}
+			source = existing.text;
+			const names = new Map<string, string | undefined>();
+			for (const reference of mentionReferences(source)) names.set(reference, await client.userName(location, reference));
+			const mentioned = mentionsForEditing(source, (reference) => names.get(reference));
+			const issues = issuesForEditing(mentioned.text);
+			initial = { text: issues.text, mentions: [...mentioned.mentions, ...issues.mentions] };
+		} catch (error) {
+			console.error("XWiki Publisher: reading the comment failed", error);
+			this.report(`Could not read the comment: ${errorMessage(error)}`, true);
+			return;
+		}
+		const text = await promptText(this.app, "Edit XWiki comment", "The comment", "Save", undefined, this.mentionInput(file), initial);
+		if (!text || text === source.trim()) return;
+		await this.exclusive(`editing a comment of "${file.basename}"`, async () => {
+			const notice = new Notice("Sending the comment to XWiki…", 0);
+			try {
+				const page = await client.getPage(location);
+				if (!page) {
+					this.report("The page is no longer on XWiki.", true);
+					return;
+				}
+				await this.sync.postComment(client, file, location, page, () => client.updateComment(location, comment, text));
+				this.report(`Comment changed on "${file.basename}" on XWiki.`);
+			} catch (error) {
+				console.error("XWiki Publisher: editing a comment failed", error);
+				this.report(`Changing the comment failed: ${errorMessage(error)}`, true);
+			} finally {
+				notice.hide();
+			}
+		});
+	}
+
 	/** Deletes an inline comment of a note with its replies, on XWiki, after asking. */
 	remove(path: string, comment: number): (() => void) | null {
 		const file = this.app.vault.getFileByPath(path);
@@ -1257,8 +1344,23 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 	}
 
 	/** Mentioning users in a comment written for the page of `file`. */
-	private mentionInput(file: TFile) {
-		return { search: (input: string) => this.searchUsers(file, input), macro: (user: MentionUser) => newMentionMacro(user.reference) };
+	private mentionInput(file: TFile): MentionInput {
+		const workPackages = (): MentionInput["workPackages"] => {
+			if (!this.settings.openProjectUrl) return undefined;
+			try {
+				const openProject = this.createOpenProjectClient();
+				return {
+					search: (input) => openProject.searchWorkPackages(input),
+					prefixes: this.keyPrefixes(),
+					searchKey: (key) => this.searchKey(key),
+					macro: (workPackage) => issueMacro(workPackage.key),
+				};
+			} catch {
+				// No token: work packages cannot be searched, mentions still can.
+				return undefined;
+			}
+		};
+		return { search: (input: string) => this.searchUsers(file, input), macro: (user: MentionUser) => newMentionMacro(user.reference), workPackages: workPackages() };
 	}
 
 	/** Starts a reply to an inline comment of a note, from the editor it is open in. */
@@ -1314,6 +1416,47 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 				const link = this.mentionText(user);
 				if (link) editor.replaceSelection(`${link} `);
 			},
+		).open();
+	}
+
+	/** Starts of work package keys that list work packages when typed with a digit, from the settings. */
+	keyPrefixes(): string[] {
+		return this.settings.openProjectUrl ? keyPrefixes(this.settings.workPackagePrefixes) : [];
+	}
+
+	/** Work packages whose key starts with `key` (`IKN-23`): that work package itself first, then the others found. */
+	async searchKey(key: string): Promise<WorkPackage[]> {
+		const found = await this.createOpenProjectClient().searchWorkPackages(key);
+		const start = key.toUpperCase();
+		return found.filter((workPackage) => workPackage.key.toUpperCase().startsWith(start));
+	}
+
+	/** The link that stands for a work package in a note: published as an issue macro. */
+	workPackageLink(workPackage: WorkPackage): string | null {
+		return issueLink(this.settings.openProjectUrl, workPackage.key);
+	}
+
+	/**
+	 * Asks for a work package of OpenProject and writes a link to it at the cursor, which publishing sends as an issue
+	 * macro and records as a link of the page in OpenProject. A selected text is the first search.
+	 */
+	insertWorkPackage(editor: Editor): void {
+		let openProject: OpenProjectClient;
+		try {
+			openProject = this.createOpenProjectClient();
+		} catch (error) {
+			this.report(errorMessage(error), true);
+			return;
+		}
+		const selected = editor.getSelection().trim();
+		new WorkPackageModal(
+			this.app,
+			(input) => openProject.searchWorkPackages(input),
+			(workPackage) => {
+				const link = issueLink(this.settings.openProjectUrl, workPackage.key);
+				if (link) editor.replaceSelection(`${link} `);
+			},
+			selected.includes("\n") ? "" : selected,
 		).open();
 	}
 
@@ -1553,7 +1696,11 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 			blocks.push(...(outgoing ? [toPage, toNote] : [toNote, toPage]));
 		}
 		const [left, right] = sides();
-		new DiffModal(this.app, name, left, right, { revert, blocks, available: () => state.remote !== null && state.note !== null }).open();
+		const broken = state.remote ? pageBrokenMentions(state.remote) : 0;
+		const explanation = broken > 0
+			? `XWiki's editor broke ${broken} mention(s) of this page: XWiki shows the last part of the user name instead of the user. The note has them right; publish it to repair the page.`
+			: undefined;
+		new DiffModal(this.app, name, left, right, { revert, blocks, notice: explanation, available: () => state.remote !== null && state.note !== null }).open();
 	}
 
 	/**
@@ -1565,7 +1712,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		if (!state.remote || state.note === null || state.page === null || !sameText(state.note, state.page)) return false;
 		const behind = this.syncState[file.path]?.version !== state.remote.version;
 		if (!behind && !this.sync.isLocallyChanged(file, await this.app.vault.read(file))) return false;
-		await this.sync.recordSync(file, state.remote.version, location, { content: state.remote.content, body: state.note, comments: true, pulled: true });
+		await this.sync.recordSync(file, state.remote.version, location, { content: state.remote.content, syntax: state.remote.syntax, body: state.note, comments: true, pulled: true });
 		this.settleIncoming(file);
 		this.log(`"${file.basename}" shows its XWiki page (version ${state.remote.version}): it is in sync.`);
 		this.changed();
@@ -1624,7 +1771,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 				const failed = await this.sync.fetchAttachments(client, location, file, [...state.attachments].filter((name) => taken.includes(name)));
 				if (failed.length > 0) this.report(`Could not download from XWiki: ${failed.join(", ")}`, true);
 				// The note shows the page: it is in sync with this version.
-				if (sameText(next, page)) await this.sync.recordSync(file, remote.version, location, { content: remote.content, body: next, comments: true, pulled: true });
+				if (sameText(next, page)) await this.sync.recordSync(file, remote.version, location, { content: remote.content, syntax: remote.syntax, body: next, comments: true, pulled: true });
 				this.log(`Pulled a change into "${file.basename}".`);
 			} catch (error) {
 				console.error("XWiki Publisher: pulling a change failed", error);
@@ -1779,7 +1926,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 				cancelled ? `${notes.length - checked - failed} not checked (cancelled)` : "",
 			].filter(Boolean);
 			this.report(`XWiki check of ${checked} note(s): ${parts.join("; ")}.`, failed > 0 || conflicts > 0, 10000);
-		});
+		}, "incoming");
 	}
 
 	/**
@@ -1814,7 +1961,7 @@ export default class XWikiPublisherPlugin extends Plugin implements MentionHost,
 		}
 		const files = this.publishOrder(pullable.map((change) => change.file));
 		const label = files.length === 1 ? `"${files[0].basename}"` : `${files.length} notes`;
-		await this.exclusive(`pulling ${label}`, () => this.doPullIncoming(files, label, conflict));
+		await this.exclusive(`pulling ${label}`, () => this.doPullIncoming(files, label, conflict), "incoming");
 	}
 
 	private async doPullIncoming(files: TFile[], label: string, conflict: "copy" | "overwrite"): Promise<void> {

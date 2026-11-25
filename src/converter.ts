@@ -19,6 +19,7 @@ import {
 	stripCommentMarks,
 	tasksToSymbols,
 } from "./obsidian-syntax.ts";
+import { linksToIssues } from "./issues.ts";
 import { linksToMentions } from "./mentions.ts";
 
 export type ResolvedLink =
@@ -50,6 +51,11 @@ export interface ConvertOptions {
 	 * macros (see `mentions.ts`).
 	 */
 	mentions?: { baseUrl: string };
+	/**
+	 * Address of the OpenProject: links to its work packages written as `[PROJ-42](…/wp/PROJ-42)` are written as
+	 * issue macros (see `issues.ts`).
+	 */
+	openProjectUrl?: string;
 }
 
 export interface ConvertResult {
@@ -176,6 +182,9 @@ function fillTableCells(text: string): string {
 	return lines.join("\n");
 }
 
+/** Class of the XWiki link written for an embedded file that is not an image (`![[plan.pdf]]`). */
+export const EMBED_CLASS = "obsidian-embed";
+
 /** Characters that cannot appear in a wiki link label, reference or attachment name without breaking the syntax. */
 const UNSAFE_IN_WIKI_LINK = /[[\]\n]/;
 /** Attachment names that an untyped image reference reads as something else (`Page@file`, `wiki:…`, escapes). */
@@ -218,6 +227,9 @@ function attachmentLink(embed: boolean, label: string, resolved: Extract<Resolve
 	if (ctx.references && !UNSAFE_ATTACHMENT.test(resolved.name) && !UNSAFE_IN_WIKI_LINK.test(label)) {
 		// Untyped image references are attachments of the page; links need the `attach:` type.
 		const reference = image ? resolved.name : `attach:${resolved.name}`;
+		// XWiki shows an embedded file that is not an image (`![[plan.pdf]]`) as a link: a class marks it as an embed,
+		// so it comes back as one. Parameters follow a label, so the label is always written.
+		if (embed && !image) return `[[${wikiLabel(label)}|${reference}|class="${EMBED_CLASS}"]]`;
 		return `${image ? "!" : ""}[[${label === resolved.name ? "" : `${wikiLabel(label)}|`}${reference}]]`;
 	}
 	// A bare file name in a Markdown image is a relative URL for XWiki, not an attachment: use the download URL.
@@ -406,7 +418,9 @@ export function convertNote(content: string, resolve: LinkResolver, options: Con
 	const uncommented = transformOutsideCode(body, (text) => convertComments(text, options.comments ?? "remove"));
 	// Mentions on the whole note at once: each one written in Obsidian gets an anchor that no other mention has.
 	const baseUrl = options.mentions?.baseUrl;
-	const mentioned = baseUrl ? acrossCode(uncommented, (text) => linksToMentions(text, baseUrl)) : uncommented;
+	const withMentions = baseUrl ? acrossCode(uncommented, (text) => linksToMentions(text, baseUrl)) : uncommented;
+	const openProjectUrl = options.openProjectUrl;
+	const mentioned = openProjectUrl ? transformOutsideCode(withMentions, (text) => linksToIssues(text, openProjectUrl)) : withMentions;
 	const boxed = calloutsToMacros(mentioned);
 	const safe = acrossCode(boxed, escapeUnclosedMacros);
 	const withoutDefinitions = transformOutsideCode(safe, (text) => extractFootnotes(text, footnotes));

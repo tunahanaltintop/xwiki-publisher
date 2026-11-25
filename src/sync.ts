@@ -27,9 +27,10 @@ import {
 	serializeReference,
 	vaultPathFor,
 } from "./location";
-import { anchorMentionLinks, mentionLink, mentionLogin, mentionNames, mentionReferences, mentionsToLinks } from "./mentions";
+import { issuesToLinks } from "./issues";
+import { anchorMentionLinks, brokenMentions, mentionLink, mentionLogin, mentionNames, mentionReferences, mentionsToLinks } from "./mentions";
 import { choose } from "./modals";
-import { convertFromXWiki, extractMarkdown, ReverseTarget, XWIKI_IMAGE, XWIKI_LINK } from "./reverse";
+import { convertFromXWiki, editorArtifacts, extractMarkdown, ReverseTarget, XWIKI_IMAGE, XWIKI_LINK } from "./reverse";
 import { hardLineBreaks, type XWikiPublisherSettings } from "./settings";
 import { RemoteAttachment, RemotePage, XWikiClient } from "./xwiki-client";
 import { xwiki21ToMarkdown } from "./xwiki21";
@@ -65,12 +66,25 @@ export interface SyncRecord {
 	 * the next pull when its page has something that is pulled differently now, even when the page did not change.
 	 */
 	format?: number;
+	/**
+	 * The page has mentions that XWiki's editor broke (see `brokenMentions`): the note shows them right, and is listed
+	 * as a change to publish, which repairs them. Not an edit of the note: pulling it does not conflict.
+	 */
+	brokenMentions?: true;
 }
 
 /**
  * Generation of what a pull writes into a note. 2: mention macros are pulled as links to the profiles of the users.
+ * 3: mention macros whose backslashes XWiki's editor doubled are pulled as links too.
+ * 4: issue macros are pulled as links to the work packages in OpenProject.
+ * 5: what XWiki's WYSIWYG editor writes in Markdown pages (see `editorArtifacts`) is pulled as the note had it.
  */
-const PULL_FORMAT = 2;
+const PULL_FORMAT = 5;
+
+/** Whether the note of a page written by a pull before format 5 shows what XWiki's editor wrote, and is pulled again. */
+function reconverted(record: SyncRecord, remote: RemotePage): boolean {
+	return (record.format ?? 1) < 5 && /^markdown\//i.test(remote.syntax) && editorArtifacts(remote.content);
+}
 
 /**
  * Generation of how the inline comments of a page are shown in its note, kept in `SyncRecord.comments`. 2: resolved
@@ -84,9 +98,22 @@ function commentsCurrent(record: SyncRecord): boolean {
 	return record.comments === COMMENTS_FORMAT;
 }
 
+/**
+ * Mentions that XWiki's WYSIWYG editor broke on a page (see `brokenMentions`). Only Markdown pages: in XWiki syntax a
+ * doubled backslash is how a backslash is written, and the page shows the user.
+ */
+export function pageBrokenMentions(page: { syntax?: string; content: string }): number {
+	return page.syntax && /^markdown\//i.test(page.syntax) ? brokenMentions(page.content) : 0;
+}
+
 /** Whether a page has something that a note written by an earlier pull shows differently. */
 function pulledDifferently(record: SyncRecord, remote: RemotePage): boolean {
-	return (record.format ?? 1) < PULL_FORMAT && remote.content.includes("{{mention");
+	const format = record.format ?? 1;
+	if (format < 2 && remote.content.includes("{{mention")) return true;
+	if (format < 3 && pageBrokenMentions(remote) > 0) return true;
+	// Pages in XWiki syntax are pulled from their rendered view, where the macro is already a link.
+	if (format < 4 && /^markdown\//i.test(remote.syntax) && remote.content.includes('{{issue key="')) return true;
+	return reconverted(record, remote);
 }
 
 /** Why pulling a note would change it, as found by comparing its record with its page on XWiki. */
@@ -127,6 +154,8 @@ interface SyncDetails {
 	comments?: boolean;
 	/** Content of the page at that version. */
 	content?: string;
+	/** Syntax of that content. */
+	syntax?: string;
 	/** A pull wrote the note, or found it as it would write it. */
 	pulled?: boolean;
 	/** The text the note and the page agree on, when it is not the note: only part of the note was published. */
@@ -341,6 +370,8 @@ export class SyncService {
 			comments: details.comments ? COMMENTS_FORMAT : undefined,
 			remoteHash: details.content === undefined ? previous?.remoteHash : contentHash(details.content),
 			format: details.pulled ? PULL_FORMAT : previous?.format,
+			brokenMentions:
+				details.content === undefined ? previous?.brokenMentions : pageBrokenMentions({ syntax: details.syntax, content: details.content }) > 0 ? true : undefined,
 		};
 		await this.save();
 	}
@@ -422,6 +453,11 @@ export class SyncService {
 		// Records of earlier versions do not have the content of the page: an edited note may conflict, and the pull
 		// finds out, comparing the page with the note as it was at the last sync.
 		return this.isLocallyChanged(file, await this.app.vault.cachedRead(file)) ? { status: "conflict", reason: "content" } : { status: "updated", reason: "content" };
+	}
+
+	/** Whether the page of the note has mentions that publishing the note repairs, as it was at the last sync. */
+	hasBrokenMentions(file: TFile): boolean {
+		return this.host.syncState[file.path]?.brokenMentions === true;
 	}
 
 	/** Version of the page at the last sync of the note, if any. */
@@ -969,7 +1005,14 @@ export class SyncService {
 			const name = names.get(reference) ?? mentionLogin(reference);
 			return name ? (mentionLink(baseUrl, { reference, style: "FULL_NAME" }, name) ?? undefined) : undefined;
 		};
-		return commentThreads(comments, await client.getCommentSelections(location), remote.syntax, mention, await this.resolutions(client, location));
+		return commentThreads(
+			comments,
+			await client.getCommentSelections(location),
+			remote.syntax,
+			mention,
+			await this.resolutions(client, location),
+			this.host.settings.openProjectUrl,
+		);
 	}
 
 	private async pageComments(client: XWikiClient, location: PageLocation, remote: RemotePage, interactive: boolean): Promise<CommentThread[] | undefined> {
@@ -1001,11 +1044,11 @@ export class SyncService {
 	}
 
 	/**
-	 * Writes the mention macros of a note as links, in a note that an earlier version pulled or that was typed with
-	 * macros; the rest of its text stays as it is. The links are published as the macros they were, so a note that
+	 * Writes the mention and issue macros of a note as links, in a note that an earlier version pulled or that was
+	 * typed with macros; the rest of its text stays as it is. The links are published as the macros they were, so a note that
 	 * was in sync still is. Returns whether the note was changed.
 	 */
-	private async refreshMentions(client: XWikiClient, location: PageLocation, file: TFile, record: SyncRecord): Promise<boolean> {
+	private async refreshMentions(client: XWikiClient, location: PageLocation, file: TFile, record: SyncRecord, remote: RemotePage): Promise<boolean> {
 		const baseUrl = this.host.settings.baseUrl;
 		const before = await this.app.vault.read(file);
 		const edited = this.isLocallyChanged(file, before);
@@ -1013,7 +1056,8 @@ export class SyncService {
 		let changed = false;
 		await this.app.vault.process(file, (data) => {
 			const body = stripFrontmatter(data);
-			const next = transformOutsideCode(body, (text) => mentionsToLinks(text, baseUrl, (reference) => names.get(reference)));
+			const openProjectUrl = this.host.settings.openProjectUrl;
+			const next = transformOutsideCode(body, (text) => issuesToLinks(mentionsToLinks(text, baseUrl, (reference) => names.get(reference)), openProjectUrl));
 			changed = next !== body;
 			return changed ? this.replaceBody(data, next) : data;
 		});
@@ -1022,6 +1066,7 @@ export class SyncService {
 			record.hash = undefined;
 		}
 		record.format = PULL_FORMAT;
+		record.brokenMentions = pageBrokenMentions(remote) > 0 ? true : undefined;
 		await this.save();
 		return changed;
 	}
@@ -1046,6 +1091,14 @@ export class SyncService {
 		if (!remote) return null;
 		const sameContent = record.remoteHash !== undefined && record.remoteHash === contentHash(remote.content);
 		const result = { changed: false, version: remote.version, pageChanged: record.version !== remote.version && !sameContent };
+		// While the note shows the page, mentions that XWiki's editor broke there list it as a change to publish.
+		if (record.version === remote.version || sameContent) {
+			const broken = pageBrokenMentions(remote) > 0 ? true : undefined;
+			if (record.brokenMentions !== broken) {
+				record.brokenMentions = broken;
+				await this.save();
+			}
+		}
 		const text = await read();
 		const references = mentionReferences(stripFrontmatter(text));
 		// A new comment gives the page a new version: at the version of the record, the comments shown are current.
@@ -1063,7 +1116,10 @@ export class SyncService {
 		// Mentions written in the vault get the anchors their publish gave them, when the note does not show them yet.
 		const baseUrl = this.host.settings.baseUrl;
 		const unanchored = anchorMentionLinks(stripFrontmatter(text), baseUrl, remote.content) !== stripFrontmatter(text);
-		if (references.length === 0 && !readComments && !unanchored) return result;
+		// Issue macros still in the note become links to the work packages.
+		const openProjectUrl = this.host.settings.openProjectUrl;
+		const issues = Boolean(openProjectUrl) && text.includes("{{issue");
+		if (references.length === 0 && !readComments && !unanchored && !issues) return result;
 
 		const names = await this.userNames(client, location, references, text);
 		const comments = readComments ? await this.pageComments(client, location, remote, false) : undefined;
@@ -1072,16 +1128,18 @@ export class SyncService {
 			const body = stripFrontmatter(whole);
 			let next = references.length > 0 ? transformOutsideCode(body, (part) => mentionsToLinks(part, baseUrl, (reference) => names.get(reference))) : body;
 			next = anchorMentionLinks(next, baseUrl, remote.content);
+			if (issues) next = transformOutsideCode(next, (part) => issuesToLinks(part, openProjectUrl));
 			if (comments) next = addInlineComments(`${stripInlineComments(next).replace(/\s+$/, "")}\n`, comments);
 			return next.trim() === body.trim() ? whole : this.replaceBody(whole, next);
 		});
 		result.changed = updated !== null;
-		// Mention links are published as the macros they replace: a note in sync stays in sync.
+		// Mention and issue links are published as the macros they replace: a note in sync stays in sync.
 		if (updated !== null && wasInSync) {
 			record.bodyHash = bodyHash(updated);
 			record.hash = undefined;
 		}
-		if (references.length > 0 || record.version === remote.version) record.format = PULL_FORMAT;
+		// Not when the note is to be converted again: only a pull does that.
+		if ((references.length > 0 || record.version === remote.version) && !reconverted(record, remote)) record.format = PULL_FORMAT;
 		if (comments && record.version === remote.version) record.comments = COMMENTS_FORMAT;
 		await this.save();
 		return result;
@@ -1137,6 +1195,7 @@ export class SyncService {
 			hardLineBreaks: hardLineBreaks(this.host.settings, this.app),
 			comments: this.host.settings.obsidianComments,
 			mentions: { baseUrl, names },
+			openProjectUrl: this.host.settings.openProjectUrl,
 		});
 		const comments = await this.pageComments(client, location, remote, false);
 		return { markdown: comments ? addInlineComments(markdown, comments) : markdown, attachments };
@@ -1181,12 +1240,14 @@ export class SyncService {
 		const record = existing ? this.host.syncState[existing.path] : undefined;
 		// Attachments that failed last time are tried again, even when the page did not change.
 		const retry = record?.missingAttachments ?? [];
-		if (existing && record?.version === remote.version && retry.length === 0 && !options.force) {
+		// A note an earlier pull wrote from what XWiki's editor saved is converted again, unless it was edited since.
+		const again = existing !== undefined && record !== undefined && reconverted(record, remote) && !this.isLocallyChanged(existing, await vault.read(existing));
+		if (existing && record?.version === remote.version && retry.length === 0 && !options.force && !again) {
 			// The page did not change, and the text of the note, in sync or edited, stays as it is. Only what a pull
 			// shows differently now is brought up to date: the mentions of a note written by an earlier version, and
 			// the comments of a note whose record does not have them (synced before comments were pulled, or published
 			// since; a new comment gives the page a new version).
-			let refreshed = pulledDifferently(record, remote) && (await this.refreshMentions(client, location, existing, record));
+			let refreshed = pulledDifferently(record, remote) && (await this.refreshMentions(client, location, existing, record, remote));
 			if (!commentsCurrent(record)) {
 				const comments = await this.pageComments(client, location, remote, options.interactive);
 				if (comments) {
@@ -1217,6 +1278,7 @@ export class SyncService {
 				hardLineBreaks: hardLineBreaks(this.host.settings, this.app),
 				comments: this.host.settings.obsidianComments,
 				mentions: { baseUrl, names },
+				openProjectUrl: this.host.settings.openProjectUrl,
 			});
 		const first = convert();
 		// `undefined`: comments are not pulled, or could not be read; the marks in the note are then left as they are.
@@ -1234,7 +1296,7 @@ export class SyncService {
 				await this.followLocation(existing, client, location, remote, options);
 				await this.writeMetadata(existing, client, location, remote, false);
 				await this.relocateAttachments(client, location, existing);
-				await this.recordSync(existing, remote.version, location, { comments: threads !== undefined, content: remote.content, pulled: true });
+				await this.recordSync(existing, remote.version, location, { comments: threads !== undefined, content: remote.content, syntax: remote.syntax, pulled: true });
 				return result(refresh ? "updated" : "unchanged");
 			}
 			// Decide about conflicts before downloading anything, so the local note's files are never touched first.
@@ -1297,7 +1359,7 @@ export class SyncService {
 			await this.writeMetadata(file, client, location, remote, true);
 		}
 		await this.relocateAttachments(client, location, file);
-		await this.recordSync(file, remote.version, location, { placed: !existing, missing, comments: threads !== undefined, content: remote.content, pulled: true });
+		await this.recordSync(file, remote.version, location, { placed: !existing, missing, comments: threads !== undefined, content: remote.content, syntax: remote.syntax, pulled: true });
 		return result(existing ? "updated" : "created");
 	}
 

@@ -64,6 +64,11 @@ export interface XWikiPublisherSettings {
 	openProjectUrl: string;
 	/** ID of the secret in Obsidian's secret storage that holds the OpenProject API token. */
 	openProjectTokenSecretId: string;
+	/**
+	 * Starts of work package keys (`PROJ-`), separated by commas: such a start and a digit, typed in a note or a
+	 * comment, lists the work packages whose key starts so. Empty to turn this off.
+	 */
+	workPackagePrefixes: string;
 }
 
 export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
@@ -95,6 +100,7 @@ export const DEFAULT_SETTINGS: XWikiPublisherSettings = {
 	renameFolderNotes: true,
 	openProjectUrl: "",
 	openProjectTokenSecretId: "",
+	workPackagePrefixes: "",
 };
 
 /** One row of the settings tab, rendered through the declarative settings API. */
@@ -261,6 +267,19 @@ export class XWikiPublisherSettingTab extends PluginSettingTab {
 									settings.openProjectTokenSecretId = value;
 									void this.save();
 								}),
+							),
+					},
+					{
+						name: "Work package key prefixes",
+						desc: "Typing one of these and a digit (IKN-23) in a note, or in a comment box, lists the work packages whose key starts so; the chosen one is written as a link to it, published as an issue macro. Separate several with commas. Leave empty to turn this off.",
+						build: (setting) =>
+							setting.addText((text) =>
+								text
+									.setValue(settings.workPackagePrefixes)
+									.onChange((value) => {
+										settings.workPackagePrefixes = value.trim();
+										void this.save();
+									}),
 							),
 					},
 					{

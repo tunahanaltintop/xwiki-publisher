@@ -199,7 +199,8 @@ The page title is the note name, or the `xwiki-title` property when set.
 | `%%comments%%` | Removed, or kept as hidden `{{comment}}` macros (setting **Obsidian comments**) |
 | `![[image.png]]`, `![](image.png)` | Image of the uploaded attachment: `![[alt\|image.png]]` |
 | `![[image.png\|300]]`, `\|300x200` | Sized image: `{{content syntax="xwiki/2.1"}}[[image:image.png\|\|width="300"]]{{/content}}` |
-| `![[file.pdf]]`, `[label](file.pdf)` | Link to the uploaded attachment: `[[label\|attach:file.pdf]]` |
+| `[[file.pdf]]`, `[label](file.pdf)` | Link to the uploaded attachment: `[[label\|attach:file.pdf]]` |
+| `![[file.pdf]]` | The same link, marked as an embed so it comes back as one: `[[file.pdf\|attach:file.pdf\|class="obsidian-embed"]]` |
 | `[[Note]]`, `[[Note\|alias]]` | Link to the page the note is (or will be) published to: `[[alias\|doc:Space.Note.WebHome]]` |
 | `[[Note#Heading]]`, `[[Note#^block]]` | The same link with `anchor="HHeading"` / `anchor="block"` |
 | `[[#Heading]]` | Link to the heading on the same page (`#HHeading`) |
@@ -294,6 +295,10 @@ In a note it is a link to the profile of the user, with the name XWiki shows:
   before this get their anchors when they are opened, for the mentions whose macro the page has.
 - Mentions that are not written the way the XWiki editor writes them (other parameters, users of another wiki,
   groups) stay macros in the note and are published as they are.
+- Saving a Markdown page in XWiki's WYSIWYG editor doubles the backslash in mentions of users whose login has a dot
+  (`XWiki.jane\\.doe`), and XWiki then shows another user (`@doe`). Such mentions are still pulled as links to the
+  user meant. The note is listed under *Changes*, and its comparison says why: publishing it writes the mentions
+  right again (`XWiki.jane\.doe`). Pages pulled before are found by **Check XWiki**, or when their note is opened.
 
 ### Inline comments
 
@@ -324,7 +329,8 @@ The budget of ==💬1.2M for Q3==[^xwiki-3] was approved.
   is, to be edited; the file always keeps it.
 - **Selecting the 💬 icon** of a commented text, of the line of comments without a place, or of a footnote shows the
   comment and its replies in a popover, in the reading view, in Live Preview and in table cells alike, as XWiki has
-  them now. Every comment and reply has its own **Reply** and **Delete** buttons; the comment also has **Resolve**.
+  them now. Every comment and reply has its own **Reply**, **Edit** and **Delete** buttons; the comment also has
+  **Resolve**.
   The rest of the highlighted text places the cursor as usual.
 - On a wiki with comment resolution (the `Tools.CommentResolve` service), **resolved comments are shown too**, with the
   ✅ icon instead of 💬 and a faded highlight (`==✅text==`), their footnote starting with
@@ -332,11 +338,19 @@ The budget of ==💬1.2M for Q3==[^xwiki-3] was approved.
   time the note is opened. **Resolve** in the popover resolves a comment, when you may resolve comments of the page;
   on a resolved comment it is **Reopen**. **Resolved XWiki comments** (editor menu, or the command *Show resolved
   XWiki comments of the note*) lists the resolved comments of the note with who resolved them, to reopen them.
+- **Edit** opens the text of that comment or reply as XWiki has it, its mentions shown as `@Name`, and saves the new
+  text on XWiki; its author, date and commented text stay as they are, and the mentions it had keep their anchors, so
+  nobody is notified again. It needs *edit* right on the page.
 - **Delete** removes that comment or reply and the replies below it on XWiki, for everyone, after a confirmation that
   says how many replies go with it. It needs *edit* right on the page.
 - In the comment and reply boxes, typing `@` and the start of a name lists the XWiki users: the chosen one shows as
   `@Name` and is sent as an XWiki mention, so XWiki notifies them. Mentions in pulled comments show as links with the
   names of the users.
+- With an OpenProject set up, typing `#` and the start of a subject or an id (`#PROJ-42`, `#login`) in those boxes lists
+  the work packages, and so does a key prefix of the settings and a digit (`PROJ-4`): the chosen one shows as
+  `#PROJ-42` and is sent as an issue macro (`{{issue key="PROJ-42"/}}`).
+  Work packages in pulled comments show as links to them. They are not linked to the page in OpenProject: comments
+  are not part of the page content, and their footnotes are left out when the note is published.
 - **Opening a note** updates its comments too, in the background (setting **Update comments and mentions when a note
   is opened**): the plugin reads the page, at most every two minutes per note, and shows the comments it has now.
   This takes one request when nothing changed, and never changes the text of the note: when the page text changed
@@ -438,8 +452,8 @@ page) in the settings, and select **Test OpenProject connection**, there or in t
 token is kept in Obsidian's secret storage like the XWiki token, and sent only to that URL. Without a URL the plugin
 never contacts OpenProject. Requirements and checks are in [docs/OPENPROJECT_SETUP.md](docs/OPENPROJECT_SETUP.md).
 
-These links to the configured address count, with numeric or semantic ids such as `PROJ-123`. Links in code and in
-`%%comments%%` do not:
+These links to the configured address count, with numeric or semantic ids such as `PROJ-123`, and so do issue
+macros (`{{issue key="PROJ-123"/}}`, see below). Links in code and in `%%comments%%` do not:
 
 ```text
 https://openproject.example.com/work_packages/123
@@ -464,6 +478,24 @@ result. A failure here does not fail the publish: the page is saved, and the lin
 A removal is decided from the page's content before the publish, so one that failed is not tried again: remove that link
 in OpenProject by hand.
 
+#### Work packages as issue macros
+
+XWiki's issue macro shows a work package on a page: `{{issue key="PROJ-123"/}}`. In a note it is a link to the work
+package, which opens it in OpenProject: `[PROJ-123](https://openproject.example.com/wp/PROJ-123)`. Publishing writes
+such a link (text equal to the id, OpenProject's short `/wp/` address) back as the macro; other links to work packages,
+such as `[PROJ-123](https://openproject.example.com/work_packages/PROJ-123)`, stay links.
+
+- **Pulling** writes the issue macros of a page as these links, also in notes pulled before: **Check XWiki** lists
+  them once, and opening such a note does the same.
+- **To add a work package**, choose **Add OpenProject work package** in the editor menu (right-click), or the command
+  *Insert OpenProject work package*, and search by subject or id (`PROJ-123`, `123`); a selected text is the first
+  search. With **Work package key prefixes** set (`PROJ-`, several separated by commas), typing a prefix and a digit
+  in a note (`PROJ-12`) lists the work packages whose key starts so, and choosing one writes the link; `#tags` are
+  left alone. The link is written at the cursor. The id is the one OpenProject shows (`displayId`, OpenProject 17.4 or
+  later; the number before that).
+- Publishing links the page to the work packages of its issue macros in OpenProject, like the links above.
+- Macros written otherwise (other parameters or spacing) stay macros in the note and are published as they are.
+
 ### Note properties
 
 | Property | Set by | Meaning |
@@ -487,6 +519,7 @@ in OpenProject by hand.
 | **OpenProject** | | |
 | OpenProject URL | – | Address of the OpenProject whose work packages get linked to published pages; empty turns this off. |
 | OpenProject token | – | Secret in Obsidian's secret storage holding the OpenProject API token. |
+| Work package key prefixes | – | Key starts (`PROJ-`, comma separated) that list work packages when typed with a digit in a note or a comment box. |
 | Test OpenProject connection | – | Checks the token, and that OpenProject has this XWiki as a wiki provider. |
 | **Publishing** | | |
 | Default space | `Obsidian` | Space for notes without a location of their own; dot separated for nested spaces. |

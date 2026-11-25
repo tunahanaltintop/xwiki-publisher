@@ -78,3 +78,8 @@ test("indented lines inside lists are list content, not code", () => {
 		"- item\n\n    continuation [Other](https://w/bin/view/S/Other)\n\n1. a\n\n\tmore [Other](https://w/bin/view/S/Other)\n",
 	);
 });
+
+test("embedded files that are not images are links marked as embeds", () => {
+	const { markdown } = convertNote("![[doc.pdf]] ![[doc.pdf|Plan]] [[doc.pdf]]", resolve, { xwikiReferences: true });
+	assert.equal(markdown, '[[doc.pdf|attach:doc.pdf|class="obsidian-embed"]] [[Plan|attach:doc.pdf|class="obsidian-embed"]] [[attach:doc.pdf]]\n');
+});

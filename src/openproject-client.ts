@@ -1,4 +1,5 @@
 import { requestUrl, RequestUrlResponse } from "obsidian";
+import { parseWorkPackages, searchedKey, WorkPackage } from "./issues";
 import { OpenProjectError, PageLink, RELATION_LINK_TYPE, relationLinkIn, WikiLinkApi } from "./openproject";
 import { normalizeToken } from "./token";
 
@@ -124,6 +125,35 @@ export class OpenProjectClient implements WikiLinkApi {
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * Work packages whose subject or id contains `input`, most recently updated first, as OpenProject's own search
+	 * lists them. A key (`PROJ-42`, `#42`) is also read directly, so it is found whatever the search matches.
+	 */
+	async searchWorkPackages(input: string): Promise<WorkPackage[]> {
+		const text = input.trim();
+		if (!text) return [];
+		const found: WorkPackage[] = [];
+		const key = searchedKey(text);
+		if (key) {
+			const path = `work_packages/${encodeURIComponent(key)}`;
+			try {
+				found.push(...parseWorkPackages(this.json(await this.send("GET", path), path)));
+			} catch (error) {
+				// No such work package, or not visible to the token user: the search may still find others.
+				if (!(error instanceof OpenProjectError && (error.status === 404 || error.status === 403))) throw error;
+			}
+		}
+		const filters = encodeURIComponent(JSON.stringify([{ subjectOrId: { operator: "**", values: [text.replace(/^#/, "")] } }]));
+		const sortBy = encodeURIComponent(JSON.stringify([["updatedAt", "desc"]]));
+		const path = `work_packages?filters=${filters}&sortBy=${sortBy}&pageSize=20`;
+		const keys = new Set(found.map((workPackage) => workPackage.key));
+		for (const workPackage of parseWorkPackages(this.json(await this.send("GET", path), path))) {
+			if (!keys.has(workPackage.key)) found.push(workPackage);
+			keys.add(workPackage.key);
+		}
+		return found;
 	}
 
 	async findLink(workPackage: string, link: PageLink): Promise<number | null> {

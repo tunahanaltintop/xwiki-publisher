@@ -3,6 +3,7 @@
  * date. This module is free of Obsidian imports so it can be unit tested with plain Node.
  */
 import { transformOutsideCode } from "./converter.ts";
+import { issueKeys } from "./issues.ts";
 
 /** Type of the links shown as linked pages in the Wikis tab of a work package. */
 export const RELATION_LINK_TYPE = "urn:openproject-org:api:v3:wikiPageLinks:Relation";
@@ -62,9 +63,9 @@ function isServerError(error: unknown): boolean {
 }
 
 /**
- * Work packages linked in `text`, in order of appearance, without repetitions. Only links to the OpenProject at
- * `baseUrl` count, with either scheme; links in code are examples, not references. Semantic ids (`PROJ-42`) are
- * upper-cased, because OpenProject does not distinguish their case.
+ * Work packages linked in `text`, in order of appearance, without repetitions: links to the OpenProject at `baseUrl`,
+ * with either scheme, and issue macros (`{{issue key="PROJ-42"/}}`). Links in code are examples, not references.
+ * Semantic ids (`PROJ-42`) are upper-cased, because OpenProject does not distinguish their case.
  */
 export function workPackagesIn(text: string, baseUrl: string): string[] {
 	const host = baseUrl
@@ -80,7 +81,10 @@ export function workPackagesIn(text: string, baseUrl: string): string[] {
 	);
 	const found = new Set<string>();
 	transformOutsideCode(text, (part) => {
-		for (const match of part.matchAll(pattern)) found.add(match[1].toUpperCase());
+		const keys: { index: number; key: string }[] = [];
+		for (const match of part.matchAll(pattern)) keys.push({ index: match.index ?? 0, key: match[1] });
+		for (const match of part.matchAll(/\{\{issue\b[^}]*\}\}/g)) for (const key of issueKeys(match[0])) keys.push({ index: match.index ?? 0, key });
+		for (const { key } of keys.sort((a, b) => a.index - b.index)) found.add(key.toUpperCase());
 		return part;
 	});
 	return [...found];

@@ -13,6 +13,7 @@
  * tested.
  */
 import { stripFrontmatter, stripInlineComments } from "./converter.ts";
+import { issuesToLinks } from "./issues.ts";
 import { xwiki21ToMarkdown } from "./xwiki21.ts";
 
 /** Class of the objects XWiki stores comments in; an inline comment is one with a selection. */
@@ -178,12 +179,15 @@ export function parseSelections(json: unknown): Map<number, CommentSelection> {
  * Comments are written in the syntax of their page; user mentions are macros in both syntaxes. `mention` shows a
  * mentioned user, by the reference of the macro; without it, or when it has nothing, the user's page name is shown.
  */
-function commentMarkdown(source: string, syntax: string, mention?: (reference: string) => string | undefined): string {
+function commentMarkdown(source: string, syntax: string, mention?: (reference: string) => string | undefined, openProjectUrl?: string): string {
 	const mentions = source.replace(/\{\{mention\s[^}]*?reference="([^"]+)"[^}]*\/\}\}/g, (_macro, reference: string) => {
 		const login = reference.replace(/^[^":]*:/, "").replace(/^XWiki\./, "").replace(/\\(.)/g, "$1");
 		return mention?.(reference) ?? `@${login}`;
 	});
-	return /^xwiki\/2\./i.test(syntax) ? xwiki21ToMarkdown(mentions) : mentions;
+	const markdown = /^xwiki\/2\./i.test(syntax) ? xwiki21ToMarkdown(mentions) : mentions;
+	// Work packages show as links to them. In the note they are part of a comment, which publishing leaves out: they
+	// never link the page to the work package in OpenProject.
+	return openProjectUrl ? issuesToLinks(markdown, openProjectUrl) : markdown;
 }
 
 /**
@@ -196,6 +200,7 @@ export function commentThreads(
 	syntax: string,
 	mention?: (reference: string) => string | undefined,
 	resolutions?: CommentResolutions | null,
+	openProjectUrl?: string,
 ): CommentThread[] {
 	const byId = new Map(comments.map((comment) => [comment.id, comment]));
 	/** The inline comment a comment belongs to, through the comments it answers. */
@@ -217,7 +222,7 @@ export function commentThreads(
 		const thread = threads.get(root) ?? { id: root, ...selection, entries: [], replies: [] };
 		threads.set(root, thread);
 		if (comment.id !== root) thread.replies.push(comment.id);
-		const entry: CommentEntry = { id: comment.id, replyTo: comment.replyTo, author: comment.author, date: comment.date, text: commentMarkdown(comment.text, syntax, mention) };
+		const entry: CommentEntry = { id: comment.id, replyTo: comment.replyTo, author: comment.author, date: comment.date, text: commentMarkdown(comment.text, syntax, mention, openProjectUrl) };
 		if (comment.id === root) thread.entries.unshift(entry);
 		else thread.entries.push(entry);
 	}

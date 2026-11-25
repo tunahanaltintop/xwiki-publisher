@@ -28,6 +28,8 @@ export interface DiffOptions {
 	blocks?: DiffBlockAction[];
 	/** Whether the block actions can be used: both versions exist. */
 	available?: () => boolean;
+	/** Something to know about the two versions, shown above the comparison. */
+	notice?: string;
 }
 
 /** Unchanged lines shown around each change. */
@@ -138,6 +140,7 @@ export class DiffModal extends Modal {
 				this.render();
 			});
 		}
+		if (this.options.notice) el.createDiv({ cls: "xwiki-diff-notice", text: this.options.notice });
 
 		const grid = el.createDiv({ cls: "xwiki-diff" });
 		const head = grid.createDiv({ cls: "xwiki-diff-row xwiki-diff-head" });

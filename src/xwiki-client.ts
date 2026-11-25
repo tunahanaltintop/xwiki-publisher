@@ -445,6 +445,24 @@ export class XWikiClient {
 		);
 	}
 
+	/**
+	 * Changes the text of a comment of a page (a comment, an inline comment or a reply): its author, date and the text
+	 * it is attached to stay as they are. Needs edit right.
+	 */
+	async updateComment(location: PageLocation, id: number, text: string): Promise<void> {
+		const response = await this.send(
+			{
+				url: `${this.pageRestUrl(location)}/objects/XWiki.XWikiComments/${id}/properties/comment`,
+				method: "PUT",
+				contentType: "text/plain; charset=UTF-8",
+				headers: { ...this.authHeaders(), Accept: "application/json" },
+				body: text,
+			},
+			{ allowNotFound: true },
+		);
+		if (response.status === 404) throw new XWikiError("That comment is no longer on XWiki.");
+	}
+
 	/** Adds a comment to a page as the signed-in user, as a reply to the comment `replyTo`. Needs edit right. */
 	async addComment(location: PageLocation, text: string, replyTo?: number): Promise<void> {
 		const body =

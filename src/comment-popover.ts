@@ -10,6 +10,8 @@ export interface CommentPopoverHost {
 	reply(path: string, comment: number, quote?: string): (() => void) | null;
 	/** An inline comment of the note at `path` with its replies, as XWiki has them now; `null` when it cannot be read. */
 	thread(path: string, comment: number): Promise<CommentThread | null>;
+	/** Changes the text of a comment of the note at `path` on XWiki; `null` when that is not possible. */
+	edit(path: string, comment: number): (() => void) | null;
 	/** Deletes a comment of the note at `path` with its replies, after asking; `null` when that is not possible. */
 	remove(path: string, comment: number): (() => void) | null;
 	/** Resolves a comment of the note at `path`, or reopens it; `null` when that is not possible. */
@@ -149,6 +151,7 @@ export class CommentPopover {
 				else button("Resolve", "mod-cta", this.host.resolve(path, entry.id, true));
 			}
 			button("Reply", "", this.host.reply(path, entry.id, `${entry.author}: ${entry.text}`));
+			button("Edit", "", this.host.edit(path, entry.id));
 			button("Delete", "mod-warning", this.host.remove(path, entry.id));
 		}
 	}

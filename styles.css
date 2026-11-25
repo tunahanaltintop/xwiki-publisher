@@ -3,7 +3,8 @@
 	min-width: 20em;
 }
 
-.xwiki-publisher-mention-login {
+.xwiki-publisher-mention-login,
+.xwiki-publisher-suggest-details {
 	color: var(--text-muted);
 }
 
@@ -272,10 +273,14 @@
 	visibility: hidden;
 }
 
-.xwiki-incoming-toolbar {
+.xwiki-incoming-head {
 	margin-top: var(--size-4-4);
 	border-top: 1px solid var(--background-modifier-border);
 	padding-top: var(--size-4-3);
+}
+
+.xwiki-incoming-head .xwiki-panel-busy {
+	margin-bottom: var(--size-4-2);
 }
 
 .xwiki-changes-note {
@@ -323,6 +328,16 @@
 	flex-direction: column;
 	min-height: 0;
 	flex: 1 1 auto;
+}
+
+.xwiki-diff-notice {
+	flex: none;
+	margin-bottom: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-s);
+	background-color: rgba(var(--color-yellow-rgb), 0.12);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
 }
 
 .xwiki-diff-bar {
